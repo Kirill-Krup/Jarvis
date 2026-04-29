@@ -11,6 +11,8 @@ ENV/
 .venv/
 .env/
 
+user_config.json
+
 # Файлы IDE
 .vscode/
 .idea/
