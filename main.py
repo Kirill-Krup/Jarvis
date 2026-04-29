@@ -9,6 +9,7 @@ from core.dispatcher import Dispatcher
 from commands.command_handler import CommandHandler
 from config.profile_manager import ProfileManager
 from config.settings import WAKE_WORD
+from thefuzz import fuzz
 
 
 def get_farewell() -> str:
@@ -82,12 +83,14 @@ def main():
             if not text:
                 continue
 
-            print(f"DEBUG: Получено от Listener: '{text}'")
 
-            if WAKE_WORD not in text:
+            similarity = fuzz.partial_ratio(WAKE_WORD, text)
+
+            if similarity < 70:
                 continue
 
-            print("Активирован!")
+            print(f"Активирован! (Схожесть: {similarity}%)")
+
 
             command_in_phrase = text.replace(WAKE_WORD, "").strip()
 
