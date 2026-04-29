@@ -1,6 +1,5 @@
+import random
 import re
-from random import random
-
 from commands.app_launcher import AppLauncher
 from commands.volume_control import VolumeControl
 from config.profile_manager import ProfileManager
@@ -51,15 +50,31 @@ class CommandHandler:
 
     def _handle_volume_up(self, text: str) -> str:
         self.volume_control.change_volume(+10)
-        return self._reply("Увеличиваю громкость")
+        responses = [
+            "Звук увеличен",
+            "Слушаюсь",
+            "Готово"
+        ]
+        return self._reply(random.choice(responses))
 
     def _handle_volume_down(self, text: str) -> str:
         self.volume_control.change_volume(-10)
-        return self._reply("Уменьшаю громкость")
+        responses = [
+            "Звук уменьшен",
+            "Слушаюсь",
+            "Готово"
+        ]
+        return self._reply(random.choice(responses))
 
     def _handle_mute(self, text: str) -> str:
         self.volume_control.mute()
-        return self._reply("Звук выключен")
+        responses = [
+            "Звук вылючен",
+            "Аудиосистемы выключены",
+            "Слушаюсь",
+            "Готово"
+        ]
+        return self._reply(random.choice(responses))
 
     def _handle_unmute(self, text: str) -> str:
         self.volume_control.unmute()
