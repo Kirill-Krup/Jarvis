@@ -17,7 +17,7 @@ class Listener:
             print("Убедитесь, что папка 'model' находится в корне проекта!")
             sys.exit(1)
 
-        self.device = 2
+        self.device = None
         self.sample_rate = 16000
 
         self.recognizer = KaldiRecognizer(self.model, self.sample_rate)
