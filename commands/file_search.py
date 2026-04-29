@@ -1,23 +1,30 @@
 import os
+from thefuzz import process, fuzz
 from config.settings import get_search_paths
 
-
 class FileSearch:
+    def find_app(self, app_name: str, alt_name: str = "") -> str | None:
+        all_exes = {}
+        exclude_dirs = {'windows', 'cache', 'temp', 'node_modules'}
 
-    def find_app(self, app_name: str) -> str | None:
         for search_path in get_search_paths():
-            result = self._search_in_folder(search_path, app_name)
-            if result:
-                return result
-        return None
+            if not os.path.exists(search_path): continue
 
-    def _search_in_folder(self, folder: str, app_name: str) -> str | None:
-        if not os.path.exists(folder):
-            return None
+            for root, dirs, files in os.walk(search_path):
+                dirs[:] = [d for d in dirs if d.lower() not in exclude_dirs]
+                for file in files:
+                    if file.endswith(".exe"):
+                        name = file[:-4].lower()
+                        all_exes[name] = os.path.join(root, file)
 
-        for root, dirs, files in os.walk(folder):
-            for file in files:
-                if (file.endswith(".exe")
-                        and app_name.lower() in file.lower()):
-                    return os.path.join(root, file)
+        if not all_exes: return None
+
+        match1, score1 = process.extractOne(app_name, all_exes.keys(), scorer=fuzz.partial_token_sort_ratio)
+        match2, score2 = process.extractOne(alt_name, all_exes.keys(), scorer=fuzz.partial_token_sort_ratio)
+
+        print(f"DEBUG: Сравнение {app_name} ({score1}%) и {alt_name} ({score2}%)")
+
+        if max(score1, score2) > 60:
+            return all_exes[match1 if score1 >= score2 else match2]
+
         return None
