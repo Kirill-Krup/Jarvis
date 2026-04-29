@@ -1,3 +1,16 @@
 {
-  "apps": {}
+    "apps": {
+        "telegram": "C:/Program Files\\Git\\usr\\bin\\[.exe",
+        "discord": "C:/Program Files\\Common Files\\Discord\\Discord\\DiscordSystemHelper.exe",
+        "steam": "C:/Program Files (x86)\\Steam\\steamerrorreporter.exe",
+        "chrome": "C:/Program Files\\Git\\usr\\bin\\[.exe",
+        "operagx": "C:/Program Files\\Git\\usr\\bin\\[.exe",
+        "spotify": "C:/Program Files\\Git\\usr\\bin\\[.exe",
+        "телеграмм": "C:/Program Files\\Git\\usr\\bin\\tee.exe",
+        "дискомфорт": "C:/Program Files\\Git\\usr\\bin\\sort.exe",
+        "концом": "C:/Program Files\\Microsoft Office\\root\\vfs\\ProgramFilesX86\\Microsoft Office\\Office16\\AppSharingHookController.exe",
+        "а   приложение": "C:/Program Files\\Git\\usr\\bin\\pr.exe",
+        "л   приложению": "C:/Program Files\\Git\\usr\\bin\\pr.exe",
+        "установленные приложению": "C:/Program Files\\Git\\usr\\bin\\pr.exe"
+    }
 }
