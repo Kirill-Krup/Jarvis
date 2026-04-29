@@ -1,4 +1,6 @@
 import re
+from random import random
+
 from commands.app_launcher import AppLauncher
 from commands.volume_control import VolumeControl
 from config.profile_manager import ProfileManager
@@ -61,7 +63,13 @@ class CommandHandler:
 
     def _handle_unmute(self, text: str) -> str:
         self.volume_control.unmute()
-        return self._reply("Звук включён")
+        responses = [
+            "Звук включен",
+            "Аудиосистемы активированы",
+            "Слушаюсь",
+            "Готово"
+        ]
+        return self._reply(random.choice(responses))
 
     def _handle_volume_set(self, text: str) -> str:
         numbers = re.findall(r'\d+', text)

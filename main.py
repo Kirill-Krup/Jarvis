@@ -81,6 +81,9 @@ def main():
             text = listener.listen()
             if not text:
                 continue
+
+            print(f"DEBUG: Получено от Listener: '{text}'")
+
             if WAKE_WORD not in text:
                 continue
 
