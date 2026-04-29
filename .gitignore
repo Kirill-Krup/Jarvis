@@ -1,0 +1,96 @@
+# Bytecode и кэш Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Папки с виртуальным окружением
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Файлы IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Файлы логов и баз данных
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Аудио файлы (если генерируете голос)
+*.mp3
+*.wav
+*.ogg
+*.flac
+
+# Файлы с секретами и конфигами
+*.key
+*.pem
+*.crt
+config.py
+secrets.py
+.credentials
+
+# Временные файлы
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Файлы распознавания и моделей
+*.pkl
+*.pickle
+*.h5
+*.pth
+*.pt
+*.onnx
+
+# Видео и картинки
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.avi
+
+# Архивы
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# Файлы отчетов и документации
+*.pdf
+*.docx
+*.html
+coverage/
+htmlcov/
+
+# Файлы зависимостей (лучше генерировать заново)
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Файлы тестов
+.pytest_cache/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Файлы сборки
+dist/
+build/
+*.egg-info/
+*.egg

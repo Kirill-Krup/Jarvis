@@ -13,19 +13,22 @@ class Listener:
         self.sample_rate = 16000
         self.duration = 5
 
-        # Показываем все устройства для диагностики
-        print("\n=== Доступные аудио устройства ===")
+        # Определяем устройство автоматически
         devices = sd.query_devices()
+        default_input = sd.query_devices(kind='input')
+
+        # Находим индекс дефолтного устройства
+        self.device = None
         for i, dev in enumerate(devices):
-            if dev['max_input_channels'] > 0:
-                print(f"  [{i}] 🎤 {dev['name']}")
+            if dev['name'] == default_input['name']:
+                self.device = i
+                break
 
-        # Берём дефолтный input девайс
-        default = sd.query_devices(kind='input')
-        print(f"\nИспользую: {default['name']}")
-        print(f"Listener готов ✓\n")
+        # Узнаем сколько каналов поддерживает
+        self.channels = min(2, default_input['max_input_channels'])
 
-        self.device = 2
+        print(f"\n✅ Использую: {default_input['name']}")
+        print(f"   device={self.device}, channels={self.channels}\n")
 
     def listen(self) -> str | None:
         try:
@@ -34,9 +37,9 @@ class Listener:
             audio_data = sd.rec(
                 int(self.duration * self.sample_rate),
                 samplerate=self.sample_rate,
-                channels=1,
+                channels=self.channels,  # 1 или 2 автоматически
                 dtype="int16",
-                device=self.device,
+                device=self.device,  # автоматический индекс
             )
             sd.wait()
 
