@@ -11,50 +11,73 @@ class Listener:
     def __init__(self):
         self.recognizer = sr.Recognizer()
         self.sample_rate = 16000
-        self.duration = 5
-
-        # Показываем все устройства для диагностики
-        print("\n=== Доступные аудио устройства ===")
-        devices = sd.query_devices()
-        for i, dev in enumerate(devices):
-            if dev['max_input_channels'] > 0:
-                print(f"  [{i}] 🎤 {dev['name']}")
-
-        # Берём дефолтный input девайс
-        default = sd.query_devices(kind='input')
-        print(f"\nИспользую: {default['name']}")
-        print(f"Listener готов ✓\n")
-
         self.device = 2
+
+        self.silence_threshold = 50
+        self.silence_duration = 1.5
+        self.max_duration = 15
+        self.chunk_duration = 0.1
+
+        print("Listener готов ✓")
 
     def listen(self) -> str | None:
         try:
-            print("🎤 Записываю 5 секунд...")
-
-            audio_data = sd.rec(
-                int(self.duration * self.sample_rate),
-                samplerate=self.sample_rate,
-                channels=1,
-                dtype="int16",
-                device=self.device,
+            chunks_per_second = int(1 / self.chunk_duration)
+            chunk_size = int(self.sample_rate * self.chunk_duration)
+            max_chunks = int(self.max_duration / self.chunk_duration)
+            silence_chunks_needed = int(
+                self.silence_duration / self.chunk_duration
             )
-            sd.wait()
 
-            volume = np.abs(audio_data).mean()
-            print(f"📊 Громкость: {volume:.1f}")
+            audio_chunks = []
+            silence_chunks = 0
+            speech_started = False
 
-            if volume < 50:
-                print("🔇 Тишина — пропускаю")
+            print("👂 Жду голос...", end="", flush=True)
+
+            for i in range(max_chunks):
+                chunk = sd.rec(
+                    chunk_size,
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    dtype="int16",
+                    device=self.device,
+                )
+                sd.wait()
+
+                volume = np.abs(chunk).mean()
+
+                if volume > self.silence_threshold:
+                    if not speech_started:
+                        print("\n🎤 Слушаю...", end="", flush=True)
+                        speech_started = True
+                    silence_chunks = 0
+                    audio_chunks.append(chunk)
+
+                elif speech_started:
+                    silence_chunks += 1
+                    audio_chunks.append(chunk)
+
+                    if silence_chunks % 5 == 0:
+                        print(".", end="", flush=True)
+
+                    if silence_chunks >= silence_chunks_needed:
+                        print(" готово!")
+                        break
+
+            if not audio_chunks or not speech_started:
                 return None
 
+
+            full_audio = np.concatenate(audio_chunks, axis=0)
+
             with tempfile.NamedTemporaryFile(
-                    delete=False, suffix=".wav"
+                delete=False, suffix=".wav"
             ) as tmp:
                 tmp_path = tmp.name
 
-            sf.write(tmp_path, audio_data, self.sample_rate)
+            sf.write(tmp_path, full_audio, self.sample_rate)
 
-            print("🔍 Распознаю...")
             with sr.AudioFile(tmp_path) as source:
                 audio = self.recognizer.record(source)
 
@@ -67,11 +90,11 @@ class Listener:
             return text.lower()
 
         except sr.UnknownValueError:
-            print("❓ Не распознано")
+            print("\n❓ Не распознано")
             return None
         except sr.RequestError as e:
-            print(f"🌐 Ошибка сети: {e}")
+            print(f"\n🌐 Ошибка сети: {e}")
             return None
         except Exception as e:
-            print(f"❌ Ошибка: {type(e).__name__}: {e}")
+            print(f"\n❌ Ошибка: {type(e).__name__}: {e}")
             return None

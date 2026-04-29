@@ -85,9 +85,16 @@ def main():
                 continue
 
             print("Активирован!")
-            speaker.speak(f"Слушаю, {profile.honorific}")
 
-            command_text = listener.listen()
+            command_in_phrase = text.replace(WAKE_WORD, "").strip()
+
+            if command_in_phrase:
+                print(f"Команда: '{command_in_phrase}'")
+                command_text = command_in_phrase
+            else:
+                speaker.speak(f"Слушаю, {profile.honorific}")
+                command_text = listener.listen()
+
             if not command_text:
                 speaker.speak(f"Не расслышал, {profile.honorific}")
                 continue
