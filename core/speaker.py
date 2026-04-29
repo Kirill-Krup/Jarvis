@@ -1,47 +1,52 @@
-import asyncio
-import os
-import tempfile
-import pygame
-import edge_tts
-
+import pyttsx3
+import threading
 from config.profile_manager import ProfileManager
 
 
 class Speaker:
 
     def __init__(self):
-        pygame.mixer.init()
         self.profile = ProfileManager()
+        self.engine = pyttsx3.init()
+        self._setup_voice()
         print("Speaker готов ✓")
 
+    def _setup_voice(self):
+        voices = self.engine.getProperty('voices')
+
+        honorific = self.profile.honorific
+        preferred = "female" if honorific in ["мадам", "госпожа"] else "male"
+
+        selected = None
+        for voice in voices:
+            name = voice.name.lower()
+            if preferred == "male" and any(
+                w in name for w in ["david", "mark", "george", "male", "man"]
+            ):
+                selected = voice
+                break
+            elif preferred == "female" and any(
+                w in name for w in ["zira", "female", "woman", "hazel"]
+            ):
+                selected = voice
+                break
+
+        if selected is None and voices:
+            selected = voices[0]
+
+        if selected:
+            self.engine.setProperty('voice', selected.id)
+            print(f"Голос: {selected.name}")
+
+        self.engine.setProperty('rate', 145)
+        self.engine.setProperty('volume', 1.0)
+
     def speak(self, text: str):
-        asyncio.run(self._speak_async(text))
-
-    async def _speak_async(self, text: str):
+        print(f"Джарвис: {text}")
         try:
-            print(f"Джарвис: {text}")
-
-            communicate = edge_tts.Communicate(
-                text=text,
-                voice=self.profile.current["voice"],
-                rate=self.profile.current["speed"],
-                pitch=self.profile.current["pitch"],
-            )
-
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix=".mp3"
-            ) as tmp:
-                tmp_path = tmp.name
-
-            await communicate.save(tmp_path)
-
-            pygame.mixer.music.load(tmp_path)
-            pygame.mixer.music.play()
-
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
-
-            os.unlink(tmp_path)
-
+            self.engine.say(text)
+            self.engine.runAndWait()
         except Exception as e:
             print(f"Ошибка Speaker: {e}")
+            self.engine = pyttsx3.init()
+            self._setup_voice()

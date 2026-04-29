@@ -1,21 +1,30 @@
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
 
 class VolumeControl:
 
     def __init__(self):
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(
-            IAudioEndpointVolume._iid_, CLSCTX_ALL, None
-        )
-        self.volume = interface.QueryInterface(IAudioEndpointVolume)
-        print("VolumeControl готов ✓")
+        try:
+            device = AudioUtilities.GetSpeakers()
+            interface = device._dev.Activate(
+                IAudioEndpointVolume._iid_, CLSCTX_ALL, None
+            )
+            self.volume = cast(interface, POINTER(IAudioEndpointVolume))
+            print("VolumeControl готов ✓")
+        except Exception as e:
+            print(f"VolumeControl ошибка: {e}")
+            self.volume = None
 
     def get_volume(self) -> int:
+        if not self.volume:
+            return 50
         return round(self.volume.GetMasterVolumeLevelScalar() * 100)
 
     def set_volume(self, percent: int):
+        if not self.volume:
+            return
         percent = max(0, min(100, percent))
         self.volume.SetMasterVolumeLevelScalar(percent / 100, None)
 
@@ -23,7 +32,9 @@ class VolumeControl:
         self.set_volume(self.get_volume() + delta)
 
     def mute(self):
-        self.volume.SetMute(1, None)
+        if self.volume:
+            self.volume.SetMute(1, None)
 
     def unmute(self):
-        self.volume.SetMute(0, None)
+        if self.volume:
+            self.volume.SetMute(0, None)
