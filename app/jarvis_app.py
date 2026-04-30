@@ -1,4 +1,5 @@
 import os
+import subprocess
 import time
 import threading
 import traceback
@@ -7,6 +8,7 @@ import tkinter as tk
 from config.setup_wizard import is_first_run, run_setup
 from config.profile_manager import ProfileManager
 from config.settings import WAKE_WORD
+from core.jarvice_voice_player import JarvisVoicePlayer
 from ui.gui import SplashScreen, MainWindow
 from ui.tray import TrayApp
 from core.speaker import Speaker
@@ -41,6 +43,7 @@ class JarvisApp:
         self._running = False
         self._root = None
         self._start_hidden = should_start_hidden()
+        self._jarvis_voice = JarvisVoicePlayer()
 
     def start(self):
         log("JARVIS start")
@@ -94,8 +97,9 @@ class JarvisApp:
         steps = [
             (15, "Загрузка профиля...", lambda: setattr(self, "_profile", ProfileManager())),
             (35, "Инициализация речи...", lambda: setattr(self, "_speaker", Speaker())),
-            (55, "Инициализация микрофона...", lambda: setattr(self, "_listener", Listener())),
-            (75, "Загрузка команд...", lambda: setattr(self, "_commands", CommandHandler(self._speaker))),
+            (45, "Инициализация микрофона...", lambda: setattr(self, "_listener", Listener())),
+            (65, "Загрузка команд...", lambda: setattr(self, "_commands", CommandHandler(self._speaker))),
+            (80, "Запуск голосового модуля...", self.ensure_ollama),
             (90, "Запуск трея...", self._start_tray_only),
             (100, "Готово", None),
         ]
@@ -168,13 +172,14 @@ class JarvisApp:
                 self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
 
             if not self._start_hidden:
-                greeting = (
-                    f"Все системы в норме. "
-                    f"Добро пожаловать, {self._profile.name}. "
-                    f"Чем могу помочь, {self._profile.honorific}?"
-                )
-                self._speaker.speak(greeting)
-                self._main_win.log(greeting)
+                self._jarvis_voice.play_layout_scan_complete()
+                # greeting = (
+                #     f"Все системы в норме. "
+                #     f"Добро пожаловать, {self._profile.name}. "
+                #     f"Чем могу помочь, {self._profile.honorific}?"
+                # )
+                # self._speaker.speak(greeting)
+                # self._main_win.log(greeting)
         except BaseException:
             log(f"Ошибка старта голосового цикла:\n{traceback.format_exc()}")
             return
@@ -273,6 +278,41 @@ class JarvisApp:
 
             except BaseException:
                 log(f"Ошибка в основном цикле:\n{traceback.format_exc()}")
+
+    def ensure_ollama(self):
+        try:
+            import requests
+            requests.get("http://localhost:11434", timeout=2)
+            print("[Ollama] Сервер уже запущен ✓")
+        except Exception:
+            print("[Ollama] Запускаю сервер...")
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            time.sleep(3)
+            print("[Ollama] Сервер запущен ✓")
+
+        threading.Thread(target=self._warmup_ollama, daemon=True).start()
+
+    def _warmup_ollama(self):
+        try:
+            import requests
+            print("[Ollama] Прогрев модели в фоне...")
+            requests.post(
+                "http://localhost:11434/api/chat",
+                json={
+                    "model": "mistral",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": False,
+                },
+                timeout=180,
+            )
+            print("[Ollama] Модель готова ✓")
+        except Exception as e:
+            print(f"[Ollama] Прогрев не удался: {e}")
 
     def _on_exit(self):
         log("JARVIS exit")
