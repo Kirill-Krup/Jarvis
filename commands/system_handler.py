@@ -16,7 +16,7 @@ class SystemHandler:
             "консоль администратора": lambda: os.system("powershell Start-Process cmd -Verb RunAs"),
             "установленные приложения": lambda: os.system("start ms-settings:appsfeatures"),
             "приложения": lambda: os.system("start ms-settings:appsfeatures"),
-            "удаление программ": lambda: os.system("start appwiz.cpl")
+            "удаление программ": lambda: os.system("start appwiz.cpl"),
         }
 
     def execute(self, task: str) -> bool:
