@@ -23,7 +23,6 @@ class SplashScreen:
         self._running = True
         self._photo   = None
         self._cap     = None
-
         self._root.withdraw()
 
         self._win = tk.Toplevel(self._root)
@@ -49,7 +48,6 @@ class SplashScreen:
         )
         self.canvas.place(x=0, y=0)
 
-        # Создаём placeholder для видео один раз
         self._video_item = self.canvas.create_image(0, 0, anchor="nw", tags="video_bg")
 
         self.canvas.create_text(
@@ -177,11 +175,10 @@ class MainWindow:
         self._build_ui(profile_name, honorific)
 
     def _build_ui(self, name: str, honorific: str):
-        # общий контейнер
+        self._status_var = tk.StringVar(value="")
         container = tk.Frame(self.root, bg="#070d17")
         container.pack(fill="both", expand=True)
 
-        # левый сайдбар
         sidebar = tk.Frame(container, bg="#040912", width=160)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
@@ -200,11 +197,9 @@ class MainWindow:
 
         tk.Frame(sidebar, bg="#0d2035", height=1).pack(fill="x", pady=(0, 8))
 
-        # правая часть – область контента
         content = tk.Frame(container, bg="#070d17")
         content.pack(side="left", fill="both", expand=True)
 
-        # создаём три страницы
         self._pages = {}
         self._current_page = None
 
@@ -212,7 +207,6 @@ class MainWindow:
         self._pages["settings"] = self._build_settings_page(content, name, honorific)
         self._pages["logs"] = self._build_logs_page(content)
 
-        # кнопки навигации в сайдбаре
         def add_nav_button(text, page_key):
             btn = tk.Button(
                 sidebar, text=text,
@@ -245,7 +239,6 @@ class MainWindow:
             padx=16, pady=6,
         ).pack(fill="x", side="bottom", pady=12)
 
-        # по умолчанию – главная
         self.show_page("home")
 
     def _build_home_page(self, parent: tk.Frame) -> tk.Frame:

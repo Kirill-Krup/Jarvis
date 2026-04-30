@@ -1,12 +1,12 @@
-# commands/command_handler.py
 import datetime
 
-from commands.app_launcher import AppLauncher
-from commands.volume_control import VolumeControl
-from commands.web_handler import WebHandler
-from config.profile_manager import ProfileManager
-from commands.file_search import FileSearch
-from commands.system_handler import SystemHandler
+from commands.app_launcher    import AppLauncher
+from commands.volume_control  import VolumeControl
+from commands.web_handler     import WebHandler
+from config.profile_manager   import ProfileManager
+from commands.file_search     import FileSearch
+from commands.system_handler  import SystemHandler
+from commands.ollama_handler  import OllamaHandler
 
 from commands import intents_web
 from commands import intents_apps
@@ -15,20 +15,20 @@ from commands import intents_media
 from commands import intents_system
 from commands import intents_utils
 
+import webbrowser
+import os
+
 
 class CommandContext:
-    """
-    Обёртка над зависимостями, чтобы удобнее передавать в intent-функции.
-    """
     def __init__(self, speaker, file_search, system_handler,
                  app_launcher, web_handler, volume_control, profile):
-        self.speaker = speaker
-        self.file_search = file_search
+        self.speaker        = speaker
+        self.file_search    = file_search
         self.system_handler = system_handler
-        self.app_launcher = app_launcher
-        self.web_handler = web_handler
+        self.app_launcher   = app_launcher
+        self.web_handler    = web_handler
         self.volume_control = volume_control
-        self.profile = profile
+        self.profile        = profile
 
     def reply(self, text: str) -> str:
         return f"{text}, {self.profile.honorific}"
@@ -36,7 +36,7 @@ class CommandContext:
 
 class Command:
     def __init__(self, text: str):
-        self.text = text
+        self.text       = text
         self.text_lower = text.lower().strip()
         self.created_at = datetime.datetime.now()
 
@@ -44,14 +44,15 @@ class Command:
 class CommandHandler:
 
     def __init__(self, speaker):
-        self.file_search = FileSearch()
+        self.file_search    = FileSearch()
         self.system_handler = SystemHandler()
-
-        self.app_launcher = AppLauncher(self.file_search)
-        self.web_handler = WebHandler()
+        self.app_launcher   = AppLauncher(self.file_search)
+        self.web_handler    = WebHandler()
         self.volume_control = VolumeControl()
-        self.profile = ProfileManager()
-        self.speaker = speaker
+        self.profile        = ProfileManager()
+        self.speaker        = speaker
+
+        self.ollama = OllamaHandler(model="mistral")
 
         self.ctx = CommandContext(
             speaker=speaker,
@@ -64,40 +65,38 @@ class CommandHandler:
         )
 
         self.command_map = [
+            # Поиск / информация
             ("найди информацию по запросу", intents_web.handle_info_search),
             ("найди информацию",            intents_web.handle_info_search),
-            ("хочу узнать",                  intents_web.handle_info_search),
+            ("хочу узнать",                 intents_web.handle_info_search),
 
+            # Веб
             ("открой сайт", intents_web.handle_web),
-            ("найди сайт", intents_web.handle_web),
-            ("зайди на",   intents_web.handle_web),
-
-            ("загугли", intents_web.handle_search),
+            ("найди сайт",  intents_web.handle_web),
+            ("зайди на",    intents_web.handle_web),
+            ("загугли",     intents_web.handle_search),
             ("найди видео", intents_web.handle_video_search),
-            ("найди",   intents_web.handle_search),
-            ("поиск",   intents_web.handle_search),
-
+            ("найди",       intents_web.handle_search),
+            ("поиск",       intents_web.handle_search),
             ("хочу посмотреть",   intents_web.handle_movie_search),
             ("давай посмотрим",   intents_web.handle_movie_search),
             ("посмотреть фильм",  intents_web.handle_movie_search),
             ("посмотреть сериал", intents_web.handle_movie_search),
-
             ("включи ютуб",   intents_web.handle_youtube),
             ("включи музыку", intents_web.handle_music),
 
             # Приложения и папки
-            ("закрой папку",   intents_apps.handle_close_folder),
-            ("закрыть папку",  intents_apps.handle_close_folder),
-            ("открой папку",   intents_apps.handle_folder),
-            ("папку",          intents_apps.handle_folder),
-            ("папка",          intents_apps.handle_folder),
-
-            ("открой",              intents_apps.handle_open),
-            ("запусти",             intents_apps.handle_open),
-            ("включи",              intents_apps.handle_open),
-            ("выключи приложение",  intents_apps.handle_close),
-            ("закрой",              intents_apps.handle_close),
-            ("закрыть",             intents_apps.handle_close),
+            ("закрой папку",  intents_apps.handle_close_folder),
+            ("закрыть папку", intents_apps.handle_close_folder),
+            ("открой папку",  intents_apps.handle_folder),
+            ("папку",         intents_apps.handle_folder),
+            ("папка",         intents_apps.handle_folder),
+            ("открой",             intents_apps.handle_open),
+            ("запусти",            intents_apps.handle_open),
+            ("включи",             intents_apps.handle_open),
+            ("выключи приложение", intents_apps.handle_close),
+            ("закрой",             intents_apps.handle_close),
+            ("закрыть",            intents_apps.handle_close),
 
             # Звук
             ("выключи звук", intents_volume.handle_mute),
@@ -115,33 +114,33 @@ class CommandHandler:
             ("предыдущая песня", intents_media.handle_media_prev),
 
             # Система
-            ("отдыхай",          intents_system.handle_sleep),
-            ("спи",              intents_system.handle_sleep),
-            ("выключись",        intents_system.handle_shutdown),
-            ("завершить работу", intents_system.handle_shutdown),
+            ("отдыхай",               intents_system.handle_sleep),
+            ("спи",                   intents_system.handle_sleep),
+            ("выключись",             intents_system.handle_shutdown),
+            ("завершить работу",      intents_system.handle_shutdown),
             ("перезагрузи компьютер", intents_system.handle_restart_pc),
-            ("перезагрузка",         intents_system.handle_restart_pc),
-            ("заблокируй компьютер", intents_system.handle_lock_pc),
-            ("блокировка",          intents_system.handle_lock_pc),
-            ("диспетчер задач",     intents_system.handle_task_manager),
-            ("проводник",           intents_system.handle_explorer),
-            ("настройки",           intents_system.handle_windows_settings),
-            ("панель управления",   intents_system.handle_control_panel),
+            ("перезагрузка",          intents_system.handle_restart_pc),
+            ("заблокируй компьютер",  intents_system.handle_lock_pc),
+            ("блокировка",            intents_system.handle_lock_pc),
+            ("диспетчер задач",       intents_system.handle_task_manager),
+            ("проводник",             intents_system.handle_explorer),
+            ("настройки",             intents_system.handle_windows_settings),
+            ("панель управления",     intents_system.handle_control_panel),
 
             # Утилиты
-            ("который час",        intents_utils.handle_time),
-            ("сколько времени",    intents_utils.handle_time),
-            ("какая дата",         intents_utils.handle_date),
-            ("какой сегодня день", intents_utils.handle_date),
-            ("открой калькулятор", intents_utils.handle_calc),
-            ("калькулятор",        intents_utils.handle_calc),
-            ("сделай скриншот",    intents_utils.handle_screenshot),
-            ("скриншот",           intents_utils.handle_screenshot),
-            ("открой загрузки",    intents_utils.handle_downloads),
-            ("открой документы",   intents_utils.handle_documents),
+            ("который час",         intents_utils.handle_time),
+            ("сколько времени",     intents_utils.handle_time),
+            ("какая дата",          intents_utils.handle_date),
+            ("какой сегодня день",  intents_utils.handle_date),
+            ("открой калькулятор",  intents_utils.handle_calc),
+            ("калькулятор",         intents_utils.handle_calc),
+            ("сделай скриншот",     intents_utils.handle_screenshot),
+            ("скриншот",            intents_utils.handle_screenshot),
+            ("открой загрузки",     intents_utils.handle_downloads),
+            ("открой документы",    intents_utils.handle_documents),
             ("открой рабочий стол", intents_utils.handle_desktop),
-            ("открой диск d",      intents_utils.handle_disk_d),
-            ("открой диск e",      intents_utils.handle_disk_e),
+            ("открой диск d",       intents_utils.handle_disk_d),
+            ("открой диск e",       intents_utils.handle_disk_e),
         ]
         print("CommandHandler готов ✓")
 
@@ -155,8 +154,57 @@ class CommandHandler:
             if keyword in cmd.text_lower:
                 return func(cmd, self.ctx)
 
-        return self._handle_question(text)
+        return self._handle_with_ollama(text)
 
-    def _handle_question(self, text: str) -> str:
-        print(f"\n[AI] Вопрос: '{text}'")
-        return self.ctx.reply("AI модуль пока не подключён")
+    def _handle_with_ollama(self, text: str) -> str:
+        print(f"\n[Ollama] Классифицирую: '{text}'")
+        result = self.ollama.classify(text)
+        print(f"[Ollama] intent={result.intent}  ru={result.target_ru}  "
+              f"en={result.target_en}  conf={result.confidence:.2f}")
+
+        intent = result.intent
+
+        if intent == "open_website":
+            if result.url:
+                webbrowser.open(result.url)
+                name = result.target_ru or result.target_en or "сайт"
+                return self.ctx.reply(f"Открываю {name}")
+            query = result.target_en or result.target_ru or text
+            return self.web_handler.open_site(query, self.ctx.profile.honorific)
+
+        if intent == "open_app":
+            return self._open_app_smart(result)
+
+        if intent == "open_folder":
+            folder_name = result.target_en or result.target_ru or ""
+            path = self.file_search.find_folder(folder_name)
+            if path:
+                os.startfile(path)
+                return self.ctx.reply(f"Открываю папку {result.target_ru or folder_name}")
+            return self.ctx.reply(f"Папка {folder_name} не найдена")
+
+        if intent in ("system", "media"):
+            target = result.target_en or result.target_ru or ""
+            if self.system_handler.execute(target):
+                return self.ctx.reply("Сделано")
+            return self.ctx.reply(f"Не знаю как выполнить: {result.target_ru}")
+
+        if result.chat_reply:
+            return result.chat_reply
+        return self.ollama.chat(text)
+
+    def _open_app_smart(self, result) -> str:
+        honorific = self.ctx.profile.honorific
+
+        for name in filter(None, [result.target_en, result.target_ru]):
+            launch_result = self.ctx.app_launcher.launch(name, honorific)
+            if launch_result and "не удалось найти" not in launch_result.lower():
+                return launch_result
+
+        for name in filter(None, [result.target_ru, result.target_en]):
+            fallback = self.ctx.web_handler.open_web_fallback(name, honorific)
+            if fallback:
+                return fallback
+
+        target_display = result.target_ru or result.target_en or "приложение"
+        return self.ctx.reply(f"Не удалось найти {target_display}")
