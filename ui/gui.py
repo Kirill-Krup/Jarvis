@@ -243,7 +243,7 @@ class MainWindow:
 
     def _build_home_page(self, parent: tk.Frame) -> tk.Frame:
         frame = tk.Frame(parent, bg="#070d17")
-        frame.place(relx=0, rely=0, relwidth=1, relheight=1)
+        # ❌ убрать place() отсюда
 
         tk.Label(
             frame, text="СИСТЕМЫ В НОРМЕ",
@@ -276,8 +276,6 @@ class MainWindow:
     def _build_settings_page(self, parent: tk.Frame,
                              name: str, honorific: str) -> tk.Frame:
         frame = tk.Frame(parent, bg="#070d17")
-        frame.place(relx=0, rely=0, relwidth=1, relheight=1)
-
         tk.Label(
             frame, text="НАСТРОЙКИ",
             font=("Courier New", 14, "bold"),
@@ -316,18 +314,14 @@ class MainWindow:
             frame,
             text="Запускать вместе с Windows",
             variable=self._autostart_var,
-            onvalue=True,
-            offvalue=False,
+            onvalue=True, offvalue=False,
             font=("Courier New", 9),
-            fg="#c3d4ff",
-            bg="#070d17",
+            fg="#c3d4ff", bg="#070d17",
             activeforeground="#ffffff",
             activebackground="#070d17",
             selectcolor="#040912",
-            anchor="w",
-            relief="flat",
-            highlightthickness=0,
-            padx=8,
+            anchor="w", relief="flat",
+            highlightthickness=0, padx=8,
         ).pack(anchor="w", padx=32, pady=(8, 0))
 
         def save_settings():
@@ -336,7 +330,6 @@ class MainWindow:
             cfg_local["honorific"] = self._honorific_var.get().strip()
             cfg_local["autostart"] = bool(self._autostart_var.get())
             save_config(cfg_local)
-
             if cfg_local["autostart"]:
                 enable_autostart()
             else:
@@ -356,7 +349,6 @@ class MainWindow:
 
     def _build_logs_page(self, parent: tk.Frame) -> tk.Frame:
         frame = tk.Frame(parent, bg="#070d17")
-        frame.place(relx=0, rely=0, relwidth=1, relheight=1)
 
         tk.Label(
             frame, text="ЛОГИ",
@@ -387,10 +379,17 @@ class MainWindow:
         return frame
 
     def show_page(self, key: str):
-        if self._current_page is not None:
-            self._pages[self._current_page].place_forget()
-        self._current_page = key
+        for k, page in self._pages.items():
+            page.place_forget()
+
         self._pages[key].place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._current_page = key
+
+        for k, btn in self._nav_buttons.items():
+            if k == key:
+                btn.configure(fg="#1a7fbf", bg="#0a1628")
+            else:
+                btn.configure(fg="#c3d4ff", bg="#040912")
 
     def log(self, message: str):
         def _do():

@@ -15,10 +15,7 @@ def _extract_folder_name(text: str) -> str:
 
 
 def handle_open(cmd, ctx):
-    """
-    'открой ...', 'запусти ...', 'включи ...'
-    """
-    from commands.web_handler import KNOWN_SITES, APP_WEB_FALLBACK
+    from commands.web.web_handler import KNOWN_SITES, APP_WEB_FALLBACK
 
     text = cmd.text_lower
     app_name = (
@@ -54,9 +51,6 @@ def handle_open(cmd, ctx):
 
 
 def handle_close(cmd, ctx):
-    """
-    'закрой ...', 'закрыть ...', 'выключи приложение ...'
-    """
     text = cmd.text_lower
     app_name = (
         text.replace("закрой", "")
@@ -72,8 +66,15 @@ def handle_close(cmd, ctx):
     if "папк" in app_name:
         return handle_close_folder(cmd, ctx)
 
-    return ctx.app_launcher.close(app_name, ctx.profile.honorific)
+    if app_name == "проводник":
+        os.system(
+            'powershell -Command "'
+            '$sh = New-Object -ComObject Shell.Application; '
+            '$sh.Windows() | ForEach-Object { $_.Quit() }"'
+        )
+        return ctx.reply("Закрываю проводник")
 
+    return ctx.app_launcher.close(app_name, ctx.profile.honorific)
 
 def handle_folder(cmd, ctx):
     text = cmd.text_lower

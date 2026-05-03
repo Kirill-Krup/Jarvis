@@ -20,18 +20,6 @@ from core.logging_utils import log
 from core.startup_mode import should_start_hidden
 
 
-def _get_farewell() -> str:
-    import datetime
-    h = datetime.datetime.now().hour
-    if 6 <= h < 11:
-        return "Доброго утра"
-    if 11 <= h < 18:
-        return "Хорошего дня"
-    if 18 <= h < 23:
-        return "Хорошего вечера"
-    return "Доброй ночи"
-
-
 class JarvisApp:
     def __init__(self):
         self._profile = None
@@ -170,16 +158,9 @@ class JarvisApp:
             if self._main_win:
                 self._main_win.set_status("Ожидаю обращение...")
                 self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-
             if not self._start_hidden:
-                self._jarvis_voice.play_layout_scan_complete()
-                # greeting = (
-                #     f"Все системы в норме. "
-                #     f"Добро пожаловать, {self._profile.name}. "
-                #     f"Чем могу помочь, {self._profile.honorific}?"
-                # )
-                # self._speaker.speak(greeting)
-                # self._main_win.log(greeting)
+                self._speaker.speak_import()
+                self._speaker.speak_greeting()
         except BaseException:
             log(f"Ошибка старта голосового цикла:\n{traceback.format_exc()}")
             return
@@ -192,26 +173,30 @@ class JarvisApp:
                 if sleeping:
                     self._main_win.set_status("Режим сна 💤")
                     self._main_win.set_home_status("Режим сна")
-                    time.sleep(3)
-                    text = self._listener.listen()
-                    if text and WAKE_WORD in text and "проснись" in text:
+
+                    trigger = self._listener.listen_wake()
+
+                    if trigger == "wakeup":
                         sleeping = False
-                        msg = f"Снова на связи, {self._profile.honorific}"
-                        self._speaker.speak(msg)
-                        self._main_win.log(msg)
+                        self._speaker.speak_reboot()
                         self._main_win.set_status("Ожидаю обращение...")
                         self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
+
+                    elif trigger == "wake":
+                        cmd = self._listener.listen()
+                        if cmd and "проснись" in cmd:
+                            sleeping = False
+                            self._speaker.speak_reboot()
+                            self._main_win.set_status("Ожидаю обращение...")
+                            self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
+
                     continue
 
                 if waiting_for_shutdown_confirm:
                     self._main_win.set_status("Жду подтверждения выключения...")
-                    self._main_win.set_home_status("Ожидаю подтверждение выключения")
                     confirm = self._listener.listen()
                     if confirm and "да" in confirm:
-                        farewell = _get_farewell()
-                        self._speaker.speak(
-                            f"{farewell}, {self._profile.honorific}. Выключаю компьютер"
-                        )
+                        self._speaker.speak_shutdown()
                         time.sleep(3)
                         os.system("shutdown /s /t 0")
                         break
@@ -220,22 +205,15 @@ class JarvisApp:
                         self._speaker.speak(f"Отменено, {self._profile.honorific}")
                     continue
 
-                text = self._listener.listen()
-                if not text:
+                if not self._listener.listen_wake():
                     continue
 
-                similarity = fuzz.partial_ratio(WAKE_WORD, text)
-                if similarity < 70:
-                    continue
-
-                self._main_win.log(f"Активирован ({similarity}%): '{text}'")
-                self._main_win.set_status("Слушаю...")
+                self._main_win.log(f"Активирован wake-word")
+                self._main_win.set_status("Слушаю команду...")
                 self._main_win.set_home_status("Слушаю команду...")
+                self._speaker.speak_loading()
 
-                command_text = text.replace(WAKE_WORD, "").strip()
-                if not command_text:
-                    self._speaker.speak(f"Слушаю, {self._profile.honorific}")
-                    command_text = self._listener.listen()
+                command_text = self._listener.listen()
 
                 if not command_text:
                     self._speaker.speak(f"Не расслышал, {self._profile.honorific}")
@@ -248,27 +226,17 @@ class JarvisApp:
                 response = self._commands.handle(command_text)
 
                 if response == "SHUTDOWN":
-                    farewell = _get_farewell()
-                    self._speaker.speak(f"{farewell}, {self._profile.honorific}")
+                    self._speaker.speak_shutdown()
                     self._main_win.log("Завершение сессии")
                     break
-
                 elif response == "CONFIRM_SHUTDOWN_PC":
                     waiting_for_shutdown_confirm = True
-                    self._speaker.speak(
-                        f"Вы уверены, {self._profile.honorific}? Это выключит компьютер"
-                    )
-
+                    self._speaker.speak(f"Вы уверены, {self._profile.honorific}? Это выключит компьютер")
                 elif response == "SLEEP_MODE":
                     sleeping = True
-                    msg = (
-                        f"Ухожу в режим сна, {self._profile.honorific}. "
-                        f"Скажите 'Джарвис, проснись' когда понадоблюсь"
-                    )
-                    self._speaker.speak(msg)
+                    self._speaker.speak_loading()
                     self._main_win.log("Режим сна активирован")
                     self._main_win.set_home_status("Режим сна")
-
                 else:
                     self._speaker.speak(response)
                     self._main_win.log(f"Ответ: {response}")

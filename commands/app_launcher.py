@@ -4,8 +4,11 @@ import os
 from commands.file_search import FileSearch
 from transliterate import translit
 
+from core.speaker import Speaker
+
 class AppLauncher:
     def __init__(self, file_search):
+        self.speaker = Speaker()
         self.memory_path = "config/memory.json"
         self.file_search = file_search
         self.memory = self._load_memory()
@@ -31,7 +34,7 @@ class AppLauncher:
             path = self.memory["apps"][app_name_raw]
             if os.path.exists(path):
                 os.startfile(path)
-                return f"Запускаю {app_name_raw}, {honorific}"
+                return self.speaker.speak_loading()
 
         app_name_en = translit(app_name_raw, 'ru', reversed=True)
         print(f"🔍 Ищу '{app_name_raw}' (или '{app_name_en}') на диске...")
@@ -42,7 +45,7 @@ class AppLauncher:
             self.memory.setdefault("apps", {})[app_name_raw] = path
             self._save_memory()
             os.startfile(path)
-            return f"Нашёл и запускаю {app_name_raw}, {honorific}"
+            return self.speaker.speak_loading()
 
         return f"Не удалось найти {app_name_raw}, {honorific}"
 

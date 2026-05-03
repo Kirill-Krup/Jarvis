@@ -1,6 +1,6 @@
 import os
 import json
-import getpass  # ← надёжнее чем os.environ
+import getpass
 
 WAKE_WORD = "джарвис"
 

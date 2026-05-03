@@ -1,23 +1,24 @@
 import datetime
 
+from thefuzz import fuzz
+
 from commands.app_launcher    import AppLauncher
-from commands.volume_control  import VolumeControl
-from commands.web_handler     import WebHandler
+from commands.system.volume_control import VolumeControl
+from commands.web.web_handler import WebHandler
 from config.profile_manager   import ProfileManager
 from commands.file_search     import FileSearch
-from commands.system_handler  import SystemHandler
+from commands.system.system_handler import SystemHandler
 from commands.ollama_handler  import OllamaHandler
 
-from commands import intents_web
+from commands.web import intents_web, intents_youtube
 from commands import intents_apps
-from commands import intents_volume
 from commands import intents_media
-from commands import intents_system
-from commands import intents_utils
+from commands.system import intents_system, intents_volume, intents_utils, intents_display, intents_scan
 
 import webbrowser
 import os
 
+USE_STATIC_MAP = False
 
 class CommandContext:
     def __init__(self, speaker, file_search, system_handler,
@@ -29,6 +30,10 @@ class CommandContext:
         self.web_handler    = web_handler
         self.volume_control = volume_control
         self.profile        = profile
+
+    def speak(self, text: str) -> str:
+        self.speaker.speak(text)
+        return text
 
     def reply(self, text: str) -> str:
         return f"{text}, {self.profile.honorific}"
@@ -44,6 +49,9 @@ class Command:
 class CommandHandler:
 
     def __init__(self, speaker):
+        self.fast_map = [
+            ""
+        ]
         self.file_search    = FileSearch()
         self.system_handler = SystemHandler()
         self.app_launcher   = AppLauncher(self.file_search)
@@ -52,7 +60,7 @@ class CommandHandler:
         self.profile        = ProfileManager()
         self.speaker        = speaker
 
-        self.ollama = OllamaHandler(model="mistral")
+        self.ollama = OllamaHandler()
 
         self.ctx = CommandContext(
             speaker=speaker,
@@ -67,23 +75,40 @@ class CommandHandler:
         self.command_map = [
             # Поиск / информация
             ("найди информацию по запросу", intents_web.handle_info_search),
-            ("найди информацию",            intents_web.handle_info_search),
-            ("хочу узнать",                 intents_web.handle_info_search),
+            ("найди информацию", intents_web.handle_info_search),
+            ("хочу узнать", intents_web.handle_info_search),
 
             # Веб
             ("открой сайт", intents_web.handle_web),
-            ("найди сайт",  intents_web.handle_web),
-            ("зайди на",    intents_web.handle_web),
-            ("загугли",     intents_web.handle_search),
+            ("найди сайт", intents_web.handle_web),
+            ("зайди на", intents_web.handle_web),
+            ("загугли", intents_web.handle_search),
             ("найди видео", intents_web.handle_video_search),
-            ("найди",       intents_web.handle_search),
-            ("поиск",       intents_web.handle_search),
-            ("хочу посмотреть",   intents_web.handle_movie_search),
-            ("давай посмотрим",   intents_web.handle_movie_search),
-            ("посмотреть фильм",  intents_web.handle_movie_search),
+            ("найди", intents_web.handle_search),
+            ("поиск", intents_web.handle_search),
+            ("хочу посмотреть", intents_web.handle_movie_search),
+            ("давай посмотрим", intents_web.handle_movie_search),
+            ("посмотреть фильм", intents_web.handle_movie_search),
             ("посмотреть сериал", intents_web.handle_movie_search),
-            ("включи ютуб",   intents_web.handle_youtube),
+            ("включи ютуб", intents_web.handle_youtube),
             ("включи музыку", intents_web.handle_music),
+
+            # Сканирование
+            ("быстрая проверка", intents_scan.handle_scan_quick),
+            ("быстрое сканирование", intents_scan.handle_scan_quick),
+            ("быструю проверку", intents_scan.handle_scan_quick),
+            ("полная проверка", intents_scan.handle_scan_full),
+            ("полное сканирование", intents_scan.handle_scan_full),
+            ("полную проверку", intents_scan.handle_scan_full),
+            ("просканируй диск", intents_scan.handle_scan_disk),
+            ("сканируй диск", intents_scan.handle_scan_disk),
+            ("проверь диск", intents_scan.handle_scan_disk),
+            ("просканируй папку", intents_scan.handle_scan_folder),
+            ("проверь папку", intents_scan.handle_scan_folder),
+            ("останови сканирование", intents_scan.handle_scan_cancel),
+            ("отмени сканирование", intents_scan.handle_scan_cancel),
+            ("остановить сканирование", intents_scan.handle_scan_cancel),
+            ("отменить сканирование", intents_scan.handle_scan_cancel),
 
             # Приложения и папки
             ("закрой папку",  intents_apps.handle_close_folder),
@@ -100,10 +125,21 @@ class CommandHandler:
 
             # Звук
             ("выключи звук", intents_volume.handle_mute),
-            ("включи звук",  intents_volume.handle_unmute),
-            ("громкость",    intents_volume.handle_volume_set),
-            ("громче",       intents_volume.handle_volume_up),
-            ("тише",         intents_volume.handle_volume_down),
+            ("включи звук", intents_volume.handle_unmute),
+            ("громкость", intents_volume.handle_volume_set),
+            ("громче", intents_volume.handle_volume_up),
+            ("тише", intents_volume.handle_volume_down),
+
+            # YouTube управление
+            ("открой канал", intents_youtube.handle_open_channel),
+            ("перейди на канал", intents_youtube.handle_open_channel),
+            ("найди на ютубе", intents_youtube.handle_youtube_search),
+            ("поищи на ютубе", intents_youtube.handle_youtube_search),
+            ("полный экран", intents_youtube.handle_youtube_fullscreen),
+            ("перемотай вперёд", intents_youtube.handle_youtube_forward),
+            ("перемотай назад", intents_youtube.handle_youtube_backward),
+            ("перемотка вперёд", intents_youtube.handle_youtube_forward),
+            ("перемотка назад", intents_youtube.handle_youtube_backward),
 
             # Медиа
             ("пауза",            intents_media.handle_media_pause),
@@ -114,33 +150,55 @@ class CommandHandler:
             ("предыдущая песня", intents_media.handle_media_prev),
 
             # Система
-            ("отдыхай",               intents_system.handle_sleep),
-            ("спи",                   intents_system.handle_sleep),
-            ("выключись",             intents_system.handle_shutdown),
-            ("завершить работу",      intents_system.handle_shutdown),
+            ("отдыхай", intents_system.handle_sleep),
+            ("спи", intents_system.handle_sleep),
+            ("выключись", intents_system.handle_shutdown),
+            ("завершить работу", intents_system.handle_shutdown),
             ("перезагрузи компьютер", intents_system.handle_restart_pc),
-            ("перезагрузка",          intents_system.handle_restart_pc),
-            ("заблокируй компьютер",  intents_system.handle_lock_pc),
-            ("блокировка",            intents_system.handle_lock_pc),
-            ("диспетчер задач",       intents_system.handle_task_manager),
-            ("проводник",             intents_system.handle_explorer),
-            ("настройки",             intents_system.handle_windows_settings),
-            ("панель управления",     intents_system.handle_control_panel),
+            ("перезагрузка", intents_system.handle_restart_pc),
+            ("заблокируй компьютер", intents_system.handle_lock_pc),
+            ("блокировка", intents_system.handle_lock_pc),
+            ("диспетчер задач", intents_system.handle_task_manager),
+            ("проводник", intents_system.handle_explorer),
+            ("настройки", intents_system.handle_windows_settings),
+            ("панель управления", intents_system.handle_control_panel),
 
             # Утилиты
-            ("который час",         intents_utils.handle_time),
-            ("сколько времени",     intents_utils.handle_time),
-            ("какая дата",          intents_utils.handle_date),
-            ("какой сегодня день",  intents_utils.handle_date),
-            ("открой калькулятор",  intents_utils.handle_calc),
-            ("калькулятор",         intents_utils.handle_calc),
-            ("сделай скриншот",     intents_utils.handle_screenshot),
-            ("скриншот",            intents_utils.handle_screenshot),
-            ("открой загрузки",     intents_utils.handle_downloads),
-            ("открой документы",    intents_utils.handle_documents),
+            ("который час", intents_utils.handle_time),
+            ("сколько времени", intents_utils.handle_time),
+            ("какая дата", intents_utils.handle_date),
+            ("какой сегодня день", intents_utils.handle_date),
+            ("открой калькулятор", intents_utils.handle_calc),
+            ("калькулятор", intents_utils.handle_calc),
+            ("сделай скриншот", intents_utils.handle_screenshot),
+            ("скриншот", intents_utils.handle_screenshot),
+            ("открой загрузки", intents_utils.handle_downloads),
+            ("открой документы", intents_utils.handle_documents),
             ("открой рабочий стол", intents_utils.handle_desktop),
-            ("открой диск d",       intents_utils.handle_disk_d),
-            ("открой диск e",       intents_utils.handle_disk_e),
+            ("открой диск d", intents_utils.handle_disk_d),
+            ("открой диск e", intents_utils.handle_disk_e),
+
+            # Дисплей
+            ("расширить экраны", intents_display.handle_display_extend),
+            ("расширь экраны", intents_display.handle_display_extend),
+            ("расширить мониторы", intents_display.handle_display_extend),
+            ("дублировать экраны", intents_display.handle_display_duplicate),
+            ("повторять экраны", intents_display.handle_display_duplicate),
+            ("дублируй экраны", intents_display.handle_display_duplicate),
+            ("только первый экран", intents_display.handle_display_primary),
+            ("первый экран", intents_display.handle_display_primary),
+            ("только второй экран", intents_display.handle_display_second),
+            ("второй экран", intents_display.handle_display_second),
+            ("сколько мониторов", intents_display.handle_display_info),
+            ("какие мониторы", intents_display.handle_display_info),
+            ("яркость первого", intents_display.handle_brightness_monitor),
+            ("яркость второго", intents_display.handle_brightness_monitor),
+            ("яркость третьего", intents_display.handle_brightness_monitor),
+            ("увеличь яркость", intents_display.handle_brightness_up),
+            ("уменьши яркость", intents_display.handle_brightness_down),
+            ("ярче", intents_display.handle_brightness_up),
+            ("темнее", intents_display.handle_brightness_down),
+            ("яркость", intents_display.handle_brightness_set),
         ]
         print("CommandHandler готов ✓")
 
@@ -154,9 +212,22 @@ class CommandHandler:
             if keyword in cmd.text_lower:
                 return func(cmd, self.ctx)
 
+        best_score = 0
+        best_func = None
+        for keyword, func in self.command_map:
+            score = fuzz.partial_ratio(keyword, cmd.text_lower)
+            if score > best_score:
+                best_score = score
+                best_func = func
+
+        if best_score >= 75:
+            print(f"[FuzzyMatch] '{cmd.text_lower}' → score={best_score}")
+            return best_func(cmd, self.ctx)
+
         return self._handle_with_ollama(text)
 
     def _handle_with_ollama(self, text: str) -> str:
+        cmd = Command(text)
         print(f"\n[Ollama] Классифицирую: '{text}'")
         result = self.ollama.classify(text)
         print(f"[Ollama] intent={result.intent}  ru={result.target_ru}  "
@@ -164,6 +235,7 @@ class CommandHandler:
 
         intent = result.intent
 
+        # --- Сайт ---
         if intent == "open_website":
             if result.url:
                 webbrowser.open(result.url)
@@ -183,10 +255,40 @@ class CommandHandler:
                 return self.ctx.reply(f"Открываю папку {result.target_ru or folder_name}")
             return self.ctx.reply(f"Папка {folder_name} не найдена")
 
-        if intent in ("system", "media"):
+        if intent == "media":
+            media_map = {
+                "pause": intents_media.handle_media_pause,
+                "play": intents_media.handle_media_play,
+                "next": intents_media.handle_media_next,
+                "previous": intents_media.handle_media_prev,
+            }
+            fn = media_map.get(result.target_en or "")
+            if fn:
+                return fn(cmd, self.ctx)
+
+        if intent == "system":
             target = result.target_en or result.target_ru or ""
             if self.system_handler.execute(target):
                 return self.ctx.reply("Сделано")
+
+            system_map = {
+                "volume_up": intents_volume.handle_volume_up,
+                "volume_down": intents_volume.handle_volume_down,
+                "mute": intents_volume.handle_mute,
+                "unmute": intents_volume.handle_unmute,
+                "brightness_up": intents_display.handle_brightness_up,
+                "brightness_down": intents_display.handle_brightness_down,
+                "screenshot": intents_utils.handle_screenshot,
+                "lock": intents_system.handle_lock_pc,
+                "restart": intents_system.handle_restart_pc,
+                "sleep": intents_system.handle_sleep,
+                "task_manager": intents_system.handle_task_manager,
+                "calculator": intents_utils.handle_calc,
+            }
+            fn = system_map.get(result.target_en or "")
+            if fn:
+                return fn(cmd, self.ctx)
+
             return self.ctx.reply(f"Не знаю как выполнить: {result.target_ru}")
 
         if result.chat_reply:
