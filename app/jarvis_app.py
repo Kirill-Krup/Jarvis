@@ -7,14 +7,12 @@ import tkinter as tk
 
 from config.setup_wizard import is_first_run, run_setup
 from config.profile_manager import ProfileManager
-from config.settings import WAKE_WORD
 from core.jarvice_voice_player import JarvisVoicePlayer
 from ui.gui import SplashScreen, MainWindow
 from ui.tray import TrayApp
-from core.speaker import Speaker
+from core.speakers.speaker import Speaker
 from core.listener import Listener
 from commands.command_handler import CommandHandler
-from thefuzz import fuzz
 
 from core.logging_utils import log
 from core.startup_mode import should_start_hidden
@@ -211,7 +209,7 @@ class JarvisApp:
                 self._main_win.log(f"Активирован wake-word")
                 self._main_win.set_status("Слушаю команду...")
                 self._main_win.set_home_status("Слушаю команду...")
-                self._speaker.speak_loading()
+                self._speaker.speak_affirmation()
 
                 command_text = self._listener.listen()
 

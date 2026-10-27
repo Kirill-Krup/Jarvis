@@ -14,7 +14,7 @@ class Listener:
 
     _vad_model_cache = None
 
-    def __init__(self, model_path="model_small", wake_word="джарвис",
+    def __init__(self, model_path="model", wake_word="джарвис",
                  auto_detect_device=True, custom_device=None):
         self.q         = queue.Queue()
         self.wake_word = wake_word

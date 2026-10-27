@@ -6,7 +6,7 @@ import onnxruntime
 from transformers import AutoTokenizer
 from ruaccent import RUAccent
 
-from core.base_speaker import BaseSpeaker
+from core.speakers.base_speaker import BaseSpeaker
 
 
 class UtrobinSpeaker(BaseSpeaker):

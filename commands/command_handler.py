@@ -1,312 +1,143 @@
-import datetime
+import re
 
-from thefuzz import fuzz
-
-from commands.app_launcher    import AppLauncher
+from commands.app_launcher import AppLauncher
 from commands.system.volume_control import VolumeControl
-from commands.web.web_handler import WebHandler
-from config.profile_manager   import ProfileManager
-from commands.file_search     import FileSearch
-from commands.system.system_handler import SystemHandler
-from commands.ollama_handler  import OllamaHandler
-
-from commands.web import intents_web, intents_youtube
-from commands import intents_apps
-from commands import intents_media
-from commands.system import intents_system, intents_volume, intents_utils, intents_display, intents_scan
-
-import webbrowser
-import os
-
-USE_STATIC_MAP = False
-
-class CommandContext:
-    def __init__(self, speaker, file_search, system_handler,
-                 app_launcher, web_handler, volume_control, profile):
-        self.speaker        = speaker
-        self.file_search    = file_search
-        self.system_handler = system_handler
-        self.app_launcher   = app_launcher
-        self.web_handler    = web_handler
-        self.volume_control = volume_control
-        self.profile        = profile
-
-    def speak(self, text: str) -> str:
-        self.speaker.speak(text)
-        return text
-
-    def reply(self, text: str) -> str:
-        return f"{text}, {self.profile.honorific}"
+from commands.web import web_search
+from config.profile_manager import ProfileManager
+from core.dispatcher import Dispatcher
 
 
-class Command:
-    def __init__(self, text: str):
-        self.text       = text
-        self.text_lower = text.lower().strip()
-        self.created_at = datetime.datetime.now()
+FAST_PATH_MAX_WORDS = 3
 
 
 class CommandHandler:
 
     def __init__(self, speaker):
-        self.fast_map = [
-            ""
-        ]
-        self.file_search    = FileSearch()
-        self.system_handler = SystemHandler()
-        self.app_launcher   = AppLauncher(self.file_search)
-        self.web_handler    = WebHandler()
+        self.app_launcher = AppLauncher()
         self.volume_control = VolumeControl()
-        self.profile        = ProfileManager()
-        self.speaker        = speaker
+        self.profile = ProfileManager()
+        self.speaker = speaker
 
-        self.ollama = OllamaHandler()
+        self.command_map = {
+            "открой":            self._handle_open,
+            "запусти":           self._handle_open,
+            "громче":            self._handle_volume_up,
+            "тише":              self._handle_volume_down,
+            "выключи звук":      self._handle_mute,
+            "включи звук":       self._handle_unmute,
+            "громкость":         self._handle_volume_set,
+            "отдыхай":           self._handle_sleep,
+            "спи":               self._handle_sleep,
+            "выключись":         self._handle_shutdown,
+            "завершить работу":  self._handle_shutdown,
+        }
 
-        self.ctx = CommandContext(
-            speaker=speaker,
-            file_search=self.file_search,
-            system_handler=self.system_handler,
-            app_launcher=self.app_launcher,
-            web_handler=self.web_handler,
-            volume_control=self.volume_control,
-            profile=self.profile,
-        )
+        self.dispatcher = Dispatcher(executors={
+            "open_app":      self._tool_open_app,
+            "set_volume":    self._tool_set_volume,
+            "change_volume": self._tool_change_volume,
+            "set_mute":      self._tool_set_mute,
+            "web_search":    web_search.search,
+            "sleep_mode":    lambda: "SLEEP_MODE",
+            "exit_jarvis":   lambda: "SHUTDOWN",
+            "shutdown_pc":   lambda: "CONFIRM_SHUTDOWN_PC",
+        })
+        self.dispatcher.warmup()
 
-        self.command_map = [
-            # Поиск / информация
-            ("найди информацию по запросу", intents_web.handle_info_search),
-            ("найди информацию", intents_web.handle_info_search),
-            ("хочу узнать", intents_web.handle_info_search),
-
-            # Веб
-            ("открой сайт", intents_web.handle_web),
-            ("найди сайт", intents_web.handle_web),
-            ("зайди на", intents_web.handle_web),
-            ("загугли", intents_web.handle_search),
-            ("найди видео", intents_web.handle_video_search),
-            ("найди", intents_web.handle_search),
-            ("поиск", intents_web.handle_search),
-            ("хочу посмотреть", intents_web.handle_movie_search),
-            ("давай посмотрим", intents_web.handle_movie_search),
-            ("посмотреть фильм", intents_web.handle_movie_search),
-            ("посмотреть сериал", intents_web.handle_movie_search),
-            ("включи ютуб", intents_web.handle_youtube),
-            ("включи музыку", intents_web.handle_music),
-
-            # Сканирование
-            ("быстрая проверка", intents_scan.handle_scan_quick),
-            ("быстрое сканирование", intents_scan.handle_scan_quick),
-            ("быструю проверку", intents_scan.handle_scan_quick),
-            ("полная проверка", intents_scan.handle_scan_full),
-            ("полное сканирование", intents_scan.handle_scan_full),
-            ("полную проверку", intents_scan.handle_scan_full),
-            ("просканируй диск", intents_scan.handle_scan_disk),
-            ("сканируй диск", intents_scan.handle_scan_disk),
-            ("проверь диск", intents_scan.handle_scan_disk),
-            ("просканируй папку", intents_scan.handle_scan_folder),
-            ("проверь папку", intents_scan.handle_scan_folder),
-            ("останови сканирование", intents_scan.handle_scan_cancel),
-            ("отмени сканирование", intents_scan.handle_scan_cancel),
-            ("остановить сканирование", intents_scan.handle_scan_cancel),
-            ("отменить сканирование", intents_scan.handle_scan_cancel),
-
-            # Приложения и папки
-            ("закрой папку",  intents_apps.handle_close_folder),
-            ("закрыть папку", intents_apps.handle_close_folder),
-            ("открой папку",  intents_apps.handle_folder),
-            ("папку",         intents_apps.handle_folder),
-            ("папка",         intents_apps.handle_folder),
-            ("открой",             intents_apps.handle_open),
-            ("запусти",            intents_apps.handle_open),
-            ("включи",             intents_apps.handle_open),
-            ("выключи приложение", intents_apps.handle_close),
-            ("закрой",             intents_apps.handle_close),
-            ("закрыть",            intents_apps.handle_close),
-
-            # Звук
-            ("выключи звук", intents_volume.handle_mute),
-            ("включи звук", intents_volume.handle_unmute),
-            ("громкость", intents_volume.handle_volume_set),
-            ("громче", intents_volume.handle_volume_up),
-            ("тише", intents_volume.handle_volume_down),
-
-            # YouTube управление
-            ("открой канал", intents_youtube.handle_open_channel),
-            ("перейди на канал", intents_youtube.handle_open_channel),
-            ("найди на ютубе", intents_youtube.handle_youtube_search),
-            ("поищи на ютубе", intents_youtube.handle_youtube_search),
-            ("полный экран", intents_youtube.handle_youtube_fullscreen),
-            ("перемотай вперёд", intents_youtube.handle_youtube_forward),
-            ("перемотай назад", intents_youtube.handle_youtube_backward),
-            ("перемотка вперёд", intents_youtube.handle_youtube_forward),
-            ("перемотка назад", intents_youtube.handle_youtube_backward),
-
-            # Медиа
-            ("пауза",            intents_media.handle_media_pause),
-            ("продолжи",         intents_media.handle_media_play),
-            ("следующий трек",   intents_media.handle_media_next),
-            ("следующая песня",  intents_media.handle_media_next),
-            ("предыдущий трек",  intents_media.handle_media_prev),
-            ("предыдущая песня", intents_media.handle_media_prev),
-
-            # Система
-            ("отдыхай", intents_system.handle_sleep),
-            ("спи", intents_system.handle_sleep),
-            ("выключись", intents_system.handle_shutdown),
-            ("завершить работу", intents_system.handle_shutdown),
-            ("перезагрузи компьютер", intents_system.handle_restart_pc),
-            ("перезагрузка", intents_system.handle_restart_pc),
-            ("заблокируй компьютер", intents_system.handle_lock_pc),
-            ("блокировка", intents_system.handle_lock_pc),
-            ("диспетчер задач", intents_system.handle_task_manager),
-            ("проводник", intents_system.handle_explorer),
-            ("настройки", intents_system.handle_windows_settings),
-            ("панель управления", intents_system.handle_control_panel),
-
-            # Утилиты
-            ("который час", intents_utils.handle_time),
-            ("сколько времени", intents_utils.handle_time),
-            ("какая дата", intents_utils.handle_date),
-            ("какой сегодня день", intents_utils.handle_date),
-            ("открой калькулятор", intents_utils.handle_calc),
-            ("калькулятор", intents_utils.handle_calc),
-            ("сделай скриншот", intents_utils.handle_screenshot),
-            ("скриншот", intents_utils.handle_screenshot),
-            ("открой загрузки", intents_utils.handle_downloads),
-            ("открой документы", intents_utils.handle_documents),
-            ("открой рабочий стол", intents_utils.handle_desktop),
-            ("открой диск d", intents_utils.handle_disk_d),
-            ("открой диск e", intents_utils.handle_disk_e),
-
-            # Дисплей
-            ("расширить экраны", intents_display.handle_display_extend),
-            ("расширь экраны", intents_display.handle_display_extend),
-            ("расширить мониторы", intents_display.handle_display_extend),
-            ("дублировать экраны", intents_display.handle_display_duplicate),
-            ("повторять экраны", intents_display.handle_display_duplicate),
-            ("дублируй экраны", intents_display.handle_display_duplicate),
-            ("только первый экран", intents_display.handle_display_primary),
-            ("первый экран", intents_display.handle_display_primary),
-            ("только второй экран", intents_display.handle_display_second),
-            ("второй экран", intents_display.handle_display_second),
-            ("сколько мониторов", intents_display.handle_display_info),
-            ("какие мониторы", intents_display.handle_display_info),
-            ("яркость первого", intents_display.handle_brightness_monitor),
-            ("яркость второго", intents_display.handle_brightness_monitor),
-            ("яркость третьего", intents_display.handle_brightness_monitor),
-            ("увеличь яркость", intents_display.handle_brightness_up),
-            ("уменьши яркость", intents_display.handle_brightness_down),
-            ("ярче", intents_display.handle_brightness_up),
-            ("темнее", intents_display.handle_brightness_down),
-            ("яркость", intents_display.handle_brightness_set),
-        ]
         print("CommandHandler готов ✓")
 
+    def _reply(self, text: str) -> str:
+        return f"{text}, {self.profile.honorific}"
+
+
     def handle(self, text: str) -> str:
-        cmd = Command(text)
+        text_lower = re.sub(r"[^\w\s]", " ", text.lower())
+        text_lower = " ".join(text_lower.split())
 
-        if self.system_handler.execute(cmd.text_lower):
-            return self.ctx.reply("Сделано")
+        if len(text_lower.split()) <= FAST_PATH_MAX_WORDS:
+            for keyword, method in self.command_map.items():
+                if re.search(rf"\b{re.escape(keyword)}\b", text_lower):
+                    return method(text_lower)
 
-        for keyword, func in self.command_map:
-            if keyword in cmd.text_lower:
-                return func(cmd, self.ctx)
+        return self._handle_question(text)
 
-        best_score = 0
-        best_func = None
-        for keyword, func in self.command_map:
-            score = fuzz.partial_ratio(keyword, cmd.text_lower)
-            if score > best_score:
-                best_score = score
-                best_func = func
 
-        if best_score >= 75:
-            print(f"[FuzzyMatch] '{cmd.text_lower}' → score={best_score}")
-            return best_func(cmd, self.ctx)
+    def _handle_open(self, text: str) -> str:
+        app_name = (
+            text.replace("открой", "")
+                .replace("запусти", "")
+                .strip()
+        )
+        if not app_name:
+            return self._reply("Что именно открыть")
+        return self.app_launcher.launch(app_name, self.profile.honorific)
 
-        return self._handle_with_ollama(text)
+    def _handle_volume_up(self, text: str) -> str:
+        self.volume_control.change_volume(+10)
+        return self._reply("Увеличиваю громкость")
 
-    def _handle_with_ollama(self, text: str) -> str:
-        cmd = Command(text)
-        print(f"\n[Ollama] Классифицирую: '{text}'")
-        result = self.ollama.classify(text)
-        print(f"[Ollama] intent={result.intent}  ru={result.target_ru}  "
-              f"en={result.target_en}  conf={result.confidence:.2f}")
+    def _handle_volume_down(self, text: str) -> str:
+        self.volume_control.change_volume(-10)
+        return self._reply("Уменьшаю громкость")
 
-        intent = result.intent
+    def _handle_mute(self, text: str) -> str:
+        self.volume_control.mute()
+        return self._reply("Звук выключен")
 
-        # --- Сайт ---
-        if intent == "open_website":
-            if result.url:
-                webbrowser.open(result.url)
-                name = result.target_ru or result.target_en or "сайт"
-                return self.ctx.reply(f"Открываю {name}")
-            query = result.target_en or result.target_ru or text
-            return self.web_handler.open_site(query, self.ctx.profile.honorific)
+    def _handle_unmute(self, text: str) -> str:
+        self.volume_control.unmute()
+        return self._reply("Звук включён")
 
-        if intent == "open_app":
-            return self._open_app_smart(result)
+    def _handle_volume_set(self, text: str) -> str:
+        numbers = re.findall(r'\d+', text)
+        if numbers:
+            level = int(numbers[0])
+            self.volume_control.set_volume(level)
+            return self._reply(f"Устанавливаю громкость {level} процентов")
+        return self._reply(
+            "Укажите уровень громкости, например: громкость 50"
+        )
 
-        if intent == "open_folder":
-            folder_name = result.target_en or result.target_ru or ""
-            path = self.file_search.find_folder(folder_name)
-            if path:
-                os.startfile(path)
-                return self.ctx.reply(f"Открываю папку {result.target_ru or folder_name}")
-            return self.ctx.reply(f"Папка {folder_name} не найдена")
+    def _handle_sleep(self, text: str) -> str:
+        return "SLEEP_MODE"
 
-        if intent == "media":
-            media_map = {
-                "pause": intents_media.handle_media_pause,
-                "play": intents_media.handle_media_play,
-                "next": intents_media.handle_media_next,
-                "previous": intents_media.handle_media_prev,
-            }
-            fn = media_map.get(result.target_en or "")
-            if fn:
-                return fn(cmd, self.ctx)
+    def _handle_shutdown(self, text: str) -> str:
+        if "завершить работу" in text:
+            return "CONFIRM_SHUTDOWN_PC"
+        return "SHUTDOWN"
 
-        if intent == "system":
-            target = result.target_en or result.target_ru or ""
-            if self.system_handler.execute(target):
-                return self.ctx.reply("Сделано")
 
-            system_map = {
-                "volume_up": intents_volume.handle_volume_up,
-                "volume_down": intents_volume.handle_volume_down,
-                "mute": intents_volume.handle_mute,
-                "unmute": intents_volume.handle_unmute,
-                "brightness_up": intents_display.handle_brightness_up,
-                "brightness_down": intents_display.handle_brightness_down,
-                "screenshot": intents_utils.handle_screenshot,
-                "lock": intents_system.handle_lock_pc,
-                "restart": intents_system.handle_restart_pc,
-                "sleep": intents_system.handle_sleep,
-                "task_manager": intents_system.handle_task_manager,
-                "calculator": intents_utils.handle_calc,
-            }
-            fn = system_map.get(result.target_en or "")
-            if fn:
-                return fn(cmd, self.ctx)
+    @staticmethod
+    def _to_int(value, default: int = 0) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
 
-            return self.ctx.reply(f"Не знаю как выполнить: {result.target_ru}")
+    def _tool_open_app(self, name: str) -> str:
+        name = (name or "").strip().lower()
+        if not name:
+            return self._reply("Что именно открыть")
+        return self.app_launcher.launch(name, self.profile.honorific)
 
-        if result.chat_reply:
-            return result.chat_reply
-        return self.ollama.chat(text)
+    def _tool_set_volume(self, percent) -> str:
+        level = max(0, min(100, self._to_int(percent, 50)))
+        self.volume_control.set_volume(level)
+        return self._reply(f"Устанавливаю громкость {level} процентов")
 
-    def _open_app_smart(self, result) -> str:
-        honorific = self.ctx.profile.honorific
+    def _tool_change_volume(self, delta) -> str:
+        delta = self._to_int(delta, 10)
+        self.volume_control.change_volume(delta)
+        return self._reply(
+            "Увеличиваю громкость" if delta >= 0 else "Уменьшаю громкость")
 
-        for name in filter(None, [result.target_en, result.target_ru]):
-            launch_result = self.ctx.app_launcher.launch(name, honorific)
-            if launch_result and "не удалось найти" not in launch_result.lower():
-                return launch_result
+    def _tool_set_mute(self, muted) -> str:
+        if str(muted).strip().lower() in ("false", "0", "нет", "no"):
+            self.volume_control.unmute()
+            return self._reply("Звук включён")
+        self.volume_control.mute()
+        return self._reply("Звук выключен")
 
-        for name in filter(None, [result.target_ru, result.target_en]):
-            fallback = self.ctx.web_handler.open_web_fallback(name, honorific)
-            if fallback:
-                return fallback
 
-        target_display = result.target_ru or result.target_en or "приложение"
-        return self.ctx.reply(f"Не удалось найти {target_display}")
+    def _handle_question(self, text: str) -> str:
+        return self.dispatcher.ask(text)

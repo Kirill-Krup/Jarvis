@@ -1,10 +1,8 @@
-import subprocess
 import json
 import os
-from commands.file_search import FileSearch
 from transliterate import translit
 
-from core.speaker import Speaker
+from core.speakers.speaker import Speaker
 
 class AppLauncher:
     def __init__(self, file_search):
