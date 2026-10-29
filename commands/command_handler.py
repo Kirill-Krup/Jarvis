@@ -19,12 +19,15 @@ from commands.system import intents_system, intents_volume, intents_utils, inten
 from nlu.intent_service import IntentService
 from nlu.router import IntentRouter
 from nlu.fallback import FallbackPolicy
+from nlu import actions
+from nlu.numbers import ru_numbers_to_digits
 
 # Настройки разбора команды
 SYSTEM_MAX_WORDS = 4     # SystemHandler (подстрока) только для коротких фраз
 FUZZY_MAX_WORDS = 3      # нечёткое совпадение только для коротких фраз
 FUZZY_MIN_SCORE = 85     # порог fuzz.ratio (0-100)
-MIN_CONFIDENCE = 0.5     # ниже: просим повторить, а не угадываем действие
+ACT_MIN_CONFIDENCE = 0.6   # выше: выполняем команду по намерению
+CHAT_MIN_CONFIDENCE = 0.8  # выше: это разговор, ключевые слова не проверяем
 
 class CommandContext:
     def __init__(self, speaker, file_search, system_handler,
@@ -206,7 +209,6 @@ class CommandHandler:
             ("темнее", intents_display.handle_brightness_down),
             ("яркость", intents_display.handle_brightness_set),
         ]
-        print("CommandHandler готов ✓")
 
         # Длинные (более конкретные) ключи проверяем первыми:
         # "включи звук" должно сработать раньше, чем "включи".
@@ -218,7 +220,70 @@ class CommandHandler:
     # ------------------------------------------------------------ разбор команды
 
     def handle(self, text: str) -> str:
+        """Сначала понимаем намерение (классификатор), ключевые слова — запасной путь."""
         cmd = Command(text)
+        result = self.intent_service.classify(cmd.text)
+        print(f"[NLU] intent={result.intent}  target={result.target_en}  "
+              f"query={result.params.get('query') or result.target_ru}  "
+              f"conf={result.confidence:.2f}")
+
+        blocked_dangerous = False
+
+        if result.intent != "chat" and result.confidence >= ACT_MIN_CONFIDENCE:
+            # выключение и перезагрузку по догадке модели не выполняем
+            if (self.fallback.is_dangerous(result)
+                    and (result.target_en or "") != "sleep"):
+                blocked_dangerous = True
+            else:
+                reply = self._execute_intent(cmd, result)
+                if reply is not None:
+                    return reply
+
+        elif result.intent == "chat" and result.confidence >= CHAT_MIN_CONFIDENCE:
+            return self._chat(cmd, result)
+
+        # Классификатор не уверен: пробуем прежний разбор по ключевым словам
+        reply = self._handle_by_keywords(cmd)
+        if reply is not None:
+            return reply
+
+        if blocked_dangerous:
+            return self.ctx.reply(
+                "Для этого скажите команду прямо: "
+                "«завершить работу» или «перезагрузи компьютер»")
+
+        return self._chat(cmd, result)
+
+    def _execute_intent(self, cmd, result):
+        """Выполняет распознанное намерение. None — если выполнить нечем."""
+        try:
+            if result.intent == "action":
+                label = result.target_en
+                query = result.params.get("query", "")
+
+                question = actions.clarification(label, query)
+                if question:
+                    return self.ctx.reply(question)
+
+                handler, canonical = actions.resolve(label, query)
+                print(f"[NLU] действие {label} -> «{canonical}»")
+                return handler(Command(canonical), self.ctx)
+
+            if result.intent == "system":
+                # Vosk выдаёт числа словами: «громкость пятьдесят» -> «громкость 50»
+                cmd = Command(ru_numbers_to_digits(cmd.text))
+
+            return self.router.route(cmd, result)
+        except Exception as e:
+            print(f"[NLU] ошибка выполнения {result.intent}/{result.target_en}: {e}")
+            return self.ctx.reply("Не получилось выполнить команду")
+
+    def _chat(self, cmd, result) -> str:
+        return result.chat_reply or self.ollama.chat(cmd.text)
+
+    # --------------------------------------------- запасной разбор по ключевым словам
+
+    def _handle_by_keywords(self, cmd):
         match_text = self._clean(cmd.text_lower)
         word_count = len(match_text.split())
 
@@ -237,8 +302,7 @@ class CommandHandler:
             if func:
                 return func(cmd, self.ctx)
 
-        # 4. Всё остальное понимает LLM
-        return self._handle_with_llm(cmd)
+        return None
 
     @staticmethod
     def _clean(text: str) -> str:
@@ -263,27 +327,3 @@ class CommandHandler:
             print(f"[FuzzyMatch] '{match_text}' → score={best_score}")
             return best_func
         return None
-
-    # ------------------------------------------------------------------- LLM
-
-    def _handle_with_llm(self, cmd: Command) -> str:
-        print(f"\n[LLM] Классифицирую: '{cmd.text}'")
-        result = self.intent_service.classify(cmd.text)
-        print(f"[LLM] intent={result.intent}  ru={result.target_ru}  "
-              f"en={result.target_en}  conf={result.confidence:.2f}")
-
-        if result.intent != "chat" and result.confidence < MIN_CONFIDENCE:
-            return self.ctx.reply("Не уверен, что понял. Повторите, пожалуйста")
-
-        # выключение и перезагрузку по догадке модели не выполняем
-        if (self.fallback.is_dangerous(result)
-                and (result.target_en or "") != "sleep"):
-            return self.ctx.reply(
-                "Для этого скажите команду прямо: "
-                "«завершить работу» или «перезагрузи компьютер»")
-
-        reply = self.router.route(cmd, result)
-        if reply:
-            return reply
-
-        return self.ollama.chat(cmd.text)
