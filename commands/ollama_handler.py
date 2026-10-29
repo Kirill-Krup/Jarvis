@@ -6,8 +6,15 @@ from typing import Optional
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 
-CLASSIFY_MODEL = "qwen2.5:1.5b"
-CHAT_MODEL     = "mistral"
+# Одна модель на всё: и разбор команд, и обычный разговор.
+# Qwen3 4B Instruct (~2.5 ГБ) целиком помещается в 4 ГБ видеопамяти.
+# Установка: ollama pull qwen3:4b-instruct-2507-q4_K_M
+MODEL = "qwen3:4b-instruct-2507-q4_K_M"
+CLASSIFY_MODEL = MODEL
+CHAT_MODEL     = MODEL
+
+KEEP_ALIVE = "30m"   # держать модель в памяти между командами
+NUM_CTX    = 4096    # ОДИНАКОВЫЙ во всех запросах, иначе Ollama перезагрузит модель
 
 
 INTENT_SYSTEM_PROMPT = """
@@ -199,6 +206,29 @@ chat_reply  — строка, если intent == "chat", иначе null
 {"intent":"chat","target_ru":null,"target_en":null,"url":null,"confidence":0.97,"chat_reply":"Чёрные дыры — это области пространства с настолько сильной гравитацией, что даже свет не может их покинуть."}
 """
 
+def _nullable_str():
+    return {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+
+INTENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": ["open_website", "open_app", "open_folder",
+                     "system", "media", "chat"],
+        },
+        "target_ru":  _nullable_str(),
+        "target_en":  _nullable_str(),
+        "url":        _nullable_str(),
+        "confidence": {"type": "number"},
+        "chat_reply": _nullable_str(),
+    },
+    "required": ["intent", "target_ru", "target_en",
+                 "url", "confidence", "chat_reply"],
+}
+
+
 @dataclass
 class IntentResult:
     intent:      str
@@ -231,6 +261,7 @@ class OllamaHandler:
             user=user_text,
             temperature=0.1,
             timeout=self.classify_timeout,
+            schema=INTENT_SCHEMA,
         )
         return self._parse_intent(raw, user_text)
 
@@ -243,14 +274,17 @@ class OllamaHandler:
                 {
                     "role": "system",
                     "content": (
-                        "Ты — голосовой ассистент Джарвис. "
-                        "Отвечай кратко, по-русски, без лишних слов."
+                        "Ты — голосовой ассистент Джарвис. Твои ответы "
+                        "озвучиваются голосом: отвечай по-русски, кратко "
+                        "(1-3 предложения), без списков, markdown и эмодзи."
                     )
                 },
                 *self._chat_history
             ],
             "stream": False,
-            "options": {"temperature": 0.7},
+            "keep_alive": KEEP_ALIVE,
+            "options": {"temperature": 0.6, "num_ctx": NUM_CTX,
+                        "num_predict": 220},
         }
 
         try:
@@ -275,7 +309,22 @@ class OllamaHandler:
     def reset_history(self):
         self._chat_history.clear()
 
-    def _ask(self, model, system, user, temperature=0.3, timeout: int = 15) -> str:
+    def warmup(self):
+        """Загружает модель в память заранее (первый запрос иначе ждёт загрузки)."""
+        requests.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model": self.classify_model,
+                "messages": [{"role": "user", "content": "ок"}],
+                "stream": False,
+                "keep_alive": KEEP_ALIVE,
+                "options": {"num_ctx": NUM_CTX, "num_predict": 1},
+            },
+            timeout=180,
+        )
+
+    def _ask(self, model, system, user, temperature=0.3,
+             timeout: int = 15, schema=None) -> str:
         payload = {
             "model": model,
             "messages": [
@@ -283,14 +332,28 @@ class OllamaHandler:
                 {"role": "user",   "content": user},
             ],
             "stream": False,
-            "options": {"temperature": temperature},
+            "keep_alive": KEEP_ALIVE,
+            "options": {"temperature": temperature, "num_ctx": NUM_CTX,
+                        "num_predict": 256},
         }
+        if schema is not None:
+            payload["format"] = schema
+
+        url = f"{self.base_url}/api/chat"
         try:
-            resp = requests.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-                timeout=timeout,
-            )
+            resp = requests.post(url, json=payload, timeout=timeout)
+
+            if resp.status_code == 400 and schema is not None:
+                # старая версия Ollama не понимает JSON-схему: пробуем без неё
+                print("[Ollama] format не поддерживается, повторяю без схемы")
+                retry = {k: v for k, v in payload.items() if k != "format"}
+                resp = requests.post(url, json=retry, timeout=timeout)
+
+            if resp.status_code == 404:
+                print(f"[Ollama] Модель {model} не найдена. "
+                      f"Выполните: ollama pull {model}")
+                return ""
+
             resp.raise_for_status()
             return resp.json()["message"]["content"].strip()
         except requests.exceptions.ConnectionError:

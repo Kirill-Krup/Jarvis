@@ -265,17 +265,8 @@ class JarvisApp:
 
     def _warmup_ollama(self):
         try:
-            import requests
             print("[Ollama] Прогрев модели в фоне...")
-            requests.post(
-                "http://localhost:11434/api/chat",
-                json={
-                    "model": "mistral",
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "stream": False,
-                },
-                timeout=180,
-            )
+            self._commands.ollama.warmup()
             print("[Ollama] Модель готова ✓")
         except Exception as e:
             print(f"[Ollama] Прогрев не удался: {e}")
