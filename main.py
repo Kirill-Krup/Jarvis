@@ -3,9 +3,8 @@ import os
 import datetime
 
 from config.setup_wizard import is_first_run, run_setup
-from core.speaker import Speaker
+from core.speakers.speaker import Speaker
 from core.listener import Listener
-from core.dispatcher import Dispatcher
 from commands.command_handler import CommandHandler
 from config.profile_manager import ProfileManager
 from config.settings import WAKE_WORD
@@ -34,7 +33,6 @@ def main():
     profile = ProfileManager()
     speaker = Speaker()
     listener = Listener()
-    dispatcher = Dispatcher()
     commands = CommandHandler(speaker)
 
     greeting = (
