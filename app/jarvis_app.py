@@ -1,9 +1,17 @@
 import os
+import sys
 import subprocess
 import time
 import threading
 import traceback
 import tkinter as tk
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from config.setup_wizard import is_first_run, run_setup
 from config.profile_manager import ProfileManager
@@ -126,6 +134,26 @@ class JarvisApp:
         self._tray = TrayApp(on_exit_callback=self._on_exit)
         self._tray.start()
 
+    def on_manual_command(self, cmd_text: str):
+        threading.Thread(target=self._run_manual_cmd, args=(cmd_text,), daemon=True).start()
+
+    def _run_manual_cmd(self, cmd_text: str):
+        try:
+            self._main_win.update_speech_info(raw_text=f"[Ручной ввод]: {cmd_text}", command=cmd_text)
+            self._main_win.set_home_status("Выполняю команду...")
+            response = self._commands.handle(cmd_text)
+            self._main_win.update_execution_info(response=response)
+            if response == "SHUTDOWN":
+                self._speaker.speak_shutdown()
+                self._on_exit()
+            elif response == "SLEEP_MODE":
+                self._speaker.speak_loading()
+            else:
+                self._speaker.speak(response)
+            self._main_win.set_home_status("Системы в норме. Ожидаю команду...")
+        except Exception as e:
+            log(f"Ошибка выполнения ручной команды: {e}")
+
     def _transition_to_main(self, splash, show_window: bool):
         try:
             if splash is not None:
@@ -136,6 +164,7 @@ class JarvisApp:
                 profile_name=self._profile.name if self._profile else "—",
                 honorific=self._profile.honorific if self._profile else "",
                 on_exit=self._on_exit,
+                on_command=self.on_manual_command,
             )
 
             if self._tray:
@@ -169,7 +198,7 @@ class JarvisApp:
         while self._running:
             try:
                 if sleeping:
-                    self._main_win.set_status("Режим сна 💤")
+                    self._main_win.set_status("Режим сна [SLEEP]")
                     self._main_win.set_home_status("Режим сна")
 
                     trigger = self._listener.listen_wake()
@@ -203,15 +232,30 @@ class JarvisApp:
                         self._speaker.speak(f"Отменено, {self._profile.honorific}")
                     continue
 
-                if not self._listener.listen_wake():
+                trigger_data = self._listener.listen_wake_and_command()
+                if not trigger_data:
                     continue
 
-                self._main_win.log(f"Активирован wake-word")
-                self._main_win.set_status("Слушаю команду...")
-                self._main_win.set_home_status("Слушаю команду...")
-                self._speaker.speak_affirmation()
+                trigger, command_text, raw_text = trigger_data
+                self._main_win.update_speech_info(raw_text=raw_text, command=command_text)
 
-                command_text = self._listener.listen()
+                if trigger == "wakeup":
+                    sleeping = False
+                    self._speaker.speak_reboot()
+                    self._main_win.set_status("Ожидаю обращение...")
+                    self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
+                    continue
+
+                self._main_win.log("Активирован wake-word")
+
+                # Если команда не была сказана сразу — только тогда подтверждаем голосом и слушаем
+                if not command_text:
+                    self._main_win.set_status("Слушаю команду...")
+                    self._main_win.set_home_status("Слушаю команду...")
+                    self._speaker.speak_affirmation()
+                    command_text = self._listener.listen()
+                    if command_text:
+                        self._main_win.update_speech_info(raw_text=f"{raw_text} -> {command_text}", command=command_text)
 
                 if not command_text:
                     self._speaker.speak(f"Не расслышал, {self._profile.honorific}")
@@ -222,6 +266,7 @@ class JarvisApp:
                 self._main_win.log(f"Команда: '{command_text}'")
                 self._main_win.set_home_status("Выполняю команду...")
                 response = self._commands.handle(command_text)
+                self._main_win.update_execution_info(response=response)
 
                 if response == "SHUTDOWN":
                     self._speaker.speak_shutdown()
@@ -246,28 +291,33 @@ class JarvisApp:
                 log(f"Ошибка в основном цикле:\n{traceback.format_exc()}")
 
     def ensure_ollama(self):
+        import shutil
+        if not shutil.which("ollama"):
+            print("[Ollama] Ollama не установлена на системе, запуск пропущен")
+            return
         try:
             import requests
-            requests.get("http://localhost:11434", timeout=2)
-            print("[Ollama] Сервер уже запущен ✓")
+            requests.get("http://localhost:11434", timeout=1)
+            print("[Ollama] Сервер уже запущен [OK]")
+            threading.Thread(target=self._warmup_ollama, daemon=True).start()
         except Exception:
-            print("[Ollama] Запускаю сервер...")
-            subprocess.Popen(
-                ["ollama", "serve"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            time.sleep(3)
-            print("[Ollama] Сервер запущен ✓")
-
-        threading.Thread(target=self._warmup_ollama, daemon=True).start()
+            try:
+                print("[Ollama] Запускаю сервер...")
+                subprocess.Popen(
+                    ["ollama", "serve"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                threading.Thread(target=self._warmup_ollama, daemon=True).start()
+            except Exception as e:
+                print(f"[Ollama] Не удалось запустить сервер: {e}")
 
     def _warmup_ollama(self):
         try:
             print("[Ollama] Прогрев модели в фоне...")
             self._commands.ollama.warmup()
-            print("[Ollama] Модель готова ✓")
+            print("[Ollama] Модель готова [OK]")
         except Exception as e:
             print(f"[Ollama] Прогрев не удался: {e}")
 
@@ -278,3 +328,13 @@ class JarvisApp:
             self._tray.stop()
         if self._root:
             self._root.after(0, self._root.destroy)
+
+
+if __name__ == "__main__":
+    try:
+        JarvisApp().start()
+    except SystemExit as e:
+        log(f"SystemExit: code={e.code}")
+    except BaseException:
+        log(f"Критическая ошибка:\n{traceback.format_exc()}")
+        sys.exit(1)

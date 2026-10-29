@@ -1,3 +1,10 @@
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 """LLM-диспетчер Джарвиса.
 
 Принимает фразу пользователя, отдаёт её локальной модели (Ollama) вместе со
@@ -121,7 +128,7 @@ class Dispatcher:
             print("Dispatcher: пакет ollama не установлен (pip install ollama)")
         else:
             self.client = ollama.Client(host=OLLAMA_HOST)
-            print(f"Dispatcher готов ✓ (модель {MODEL})")
+            print(f"Dispatcher готов [OK] (модель {MODEL})")
 
     # ------------------------------------------------------------------ API
 
@@ -139,7 +146,7 @@ class Dispatcher:
                     options={"num_ctx": OPTIONS["num_ctx"], "num_predict": 1},
                     keep_alive=KEEP_ALIVE,
                 )
-                print("Модель прогрета ✓")
+                print("Модель прогрета [OK]")
             except Exception as e:
                 print(f"Прогрев модели не удался: {e}")
 

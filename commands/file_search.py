@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 from thefuzz import process, fuzz
 from transliterate import translit
-from config.settings import get_search_paths
 
 
 APP_INDEX_FILE = os.path.join(
@@ -11,6 +10,33 @@ APP_INDEX_FILE = os.path.join(
     "..",
     "app_index.json"
 )
+
+APP_ALIASES = {
+    "дота": ["dota", "dota 2", "dota2"],
+    "доту": ["dota", "dota 2", "dota2"],
+    "доте": ["dota", "dota 2", "dota2"],
+    "кс": ["cs2", "csgo", "counter strike", "counter-strike"],
+    "ксго": ["cs2", "csgo", "counter strike", "counter-strike"],
+    "контра": ["cs2", "csgo", "counter strike", "counter-strike"],
+    "контру": ["cs2", "csgo", "counter strike", "counter-strike"],
+    "телега": ["telegram"],
+    "телегу": ["telegram"],
+    "телеграм": ["telegram"],
+    "стим": ["steam"],
+    "дискорд": ["discord"],
+    "диск": ["discord"],
+    "хром": ["chrome", "google chrome"],
+    "гугл": ["chrome", "google chrome"],
+    "яндекс": ["yandex", "browser"],
+    "спотифай": ["spotify"],
+    "калькулятор": ["calculator", "calc", "calculatorapp"],
+    "блокнот": ["notepad"],
+    "проводник": ["explorer"],
+    "терминал": ["wt", "cmd", "powershell"],
+    "консоль": ["cmd", "powershell", "wt"],
+    "ворд": ["word", "winword"],
+    "эксель": ["excel"],
+}
 
 
 class FileSearch:
@@ -21,8 +47,9 @@ class FileSearch:
             "node_modules", "$recycle.bin",
             "system volume information", "__pycache__"
         }
-        self.app_extensions = {".exe", ".lnk"}
+        self.app_extensions = {".exe", ".lnk", ".url"}
         self._index = None
+        self._cached_candidates = None
 
     def _normalize(self, text: str) -> str:
         return (
@@ -37,14 +64,18 @@ class FileSearch:
         except Exception:
             return text
 
-    def _safe_walk(self, search_path: str):
+    def _safe_walk(self, search_path: str, max_depth: int = 4):
         try:
+            base_depth = search_path.count(os.sep)
             for root, dirs, files in os.walk(search_path, topdown=True):
+                cur_depth = root.count(os.sep) - base_depth
+                if cur_depth >= max_depth:
+                    dirs.clear()
+                    continue
                 dirs[:] = [d for d in dirs if d.lower() not in self.exclude_dirs]
                 yield root, dirs, files
         except (PermissionError, OSError):
             return
-
 
     def _load_index(self) -> dict:
         if self._index is not None:
@@ -54,10 +85,9 @@ class FileSearch:
             try:
                 with open(APP_INDEX_FILE, "r", encoding="utf-8") as f:
                     self._index = json.load(f)
-                    print(f"[FileSearch] Загружен индекс приложений: {len(self._index)} записей")
                     return self._index
             except Exception:
-                print("[FileSearch] Не удалось прочитать app_index.json, пересканируем")
+                pass
 
         self._index = {}
         return self._index
@@ -68,134 +98,193 @@ class FileSearch:
         try:
             with open(APP_INDEX_FILE, "w", encoding="utf-8") as f:
                 json.dump(self._index, f, ensure_ascii=False, indent=2)
-            print(f"[FileSearch] Индекс приложений сохранён: {len(self._index)} записей")
         except Exception as e:
             print(f"[FileSearch] Ошибка сохранения app_index.json: {e}")
 
-    def build_full_index(self):
-        index = {}
-        for search_path in get_search_paths():
-            if not os.path.exists(search_path):
-                continue
-            print(f"[FileSearch] Полный скан: {search_path}")
-
-            for root, _, files in self._safe_walk(search_path):
-                for file in files:
-                    ext = Path(file).suffix.lower()
-                    if ext not in self.app_extensions:
-                        continue
-
-                    stem = Path(file).stem
-                    norm_name = self._normalize(stem)
-                    full_path = os.path.join(root, file)
-
-                    if norm_name not in index:
-                        index[norm_name] = full_path
-
-        self._index = index
-        self._save_index()
-
-
     def _get_candidates(self) -> list[dict]:
-        idx = self._load_index()
-        candidates = []
-
-        for name, path in idx.items():
-            if os.path.exists(path):
-                candidates.append({"name": name, "path": path, "ext": Path(path).suffix.lower()})
-
-        if not candidates:
-            candidates = self._collect_app_candidates()
-            self._index = {c["name"]: c["path"] for c in candidates}
-            self._save_index()
-
-        return candidates
+        if self._cached_candidates:
+            return self._cached_candidates
+        self._cached_candidates = self._collect_app_candidates()
+        return self._cached_candidates
 
     def _collect_app_candidates(self) -> list[dict]:
         candidates = []
-        for search_path in get_search_paths():
-            if not os.path.exists(search_path):
+        seen_paths = set()
+
+        # Tier 1: Быстрые пути (ярлыки Start Menu, Рабочий стол, папки с играми)
+        user = os.environ.get("USERNAME", "")
+        tier1_paths = [
+            os.path.expandvars("%ProgramData%/Microsoft/Windows/Start Menu/Programs"),
+            os.path.expandvars("%APPDATA%/Microsoft/Windows/Start Menu/Programs"),
+            os.path.expandvars("%USERPROFILE%/Desktop"),
+            "C:/Users/Public/Desktop",
+            "E:/Games",
+            "D:/Games",
+            "C:/Games",
+            "D:/Steam",
+            "D:/Steam/steamapps/common",
+            "C:/Program Files (x86)/Steam/steamapps/common",
+            "E:/SteamLibrary",
+            "E:/SteamLibrary/steamapps/common",
+            "D:/SteamLibrary",
+            "D:/SteamLibrary/steamapps/common",
+            f"C:/Users/{user}/AppData/Local/Programs",
+        ]
+
+        tier2_paths = [
+            "C:/Program Files",
+            "C:/Program Files (x86)",
+        ]
+
+        # Обход Tier 1
+        for p in tier1_paths:
+            if not os.path.exists(p):
                 continue
-            print(f"[FileSearch] Сканирую приложения: {search_path}")
-            for root, _, files in self._safe_walk(search_path):
+            for root, _, files in self._safe_walk(p, max_depth=4):
                 for file in files:
                     ext = Path(file).suffix.lower()
                     if ext not in self.app_extensions:
                         continue
                     stem = Path(file).stem
+                    s_lower = stem.lower()
+                    if any(bad in s_lower for bad in ["uninstall", "unins000", "crashpad", "update_helper"]):
+                        continue
+                    full_path = os.path.join(root, file)
+                    if full_path in seen_paths:
+                        continue
+                    seen_paths.add(full_path)
                     candidates.append({
                         "name": self._normalize(stem),
-                        "path": os.path.join(root, file),
+                        "raw_name": s_lower,
+                        "path": full_path,
                         "ext": ext,
+                        "tier": 1
                     })
-        print(f"[FileSearch] Кандидатов приложений: {len(candidates)}")
+
+        # Обход Tier 2 (только верхние уровни Program Files)
+        for p in tier2_paths:
+            if not os.path.exists(p):
+                continue
+            for root, _, files in self._safe_walk(p, max_depth=2):
+                for file in files:
+                    ext = Path(file).suffix.lower()
+                    if ext not in self.app_extensions:
+                        continue
+                    stem = Path(file).stem
+                    s_lower = stem.lower()
+                    if any(bad in s_lower for bad in ["uninstall", "unins000", "crashpad", "update_helper"]):
+                        continue
+                    full_path = os.path.join(root, file)
+                    if full_path in seen_paths:
+                        continue
+                    seen_paths.add(full_path)
+                    candidates.append({
+                        "name": self._normalize(stem),
+                        "raw_name": s_lower,
+                        "path": full_path,
+                        "ext": ext,
+                        "tier": 2
+                    })
+
         return candidates
 
-
     def find_app(self, app_name: str, alt_name: str = "") -> str | None:
-        app_name_norm = self._normalize(app_name)
-        alt_name_norm = self._normalize(alt_name) if alt_name else ""
+        raw_query = app_name.lower().strip()
+        queries = [self._normalize(raw_query)]
+
+        # Проверяем алиасы (например: "доту" -> ["dota", "dota 2", "dota2"])
+        if raw_query in APP_ALIASES:
+            queries.extend(APP_ALIASES[raw_query])
+
+        # Снятие падежных окончаний винительного падежа ("доту" -> "дота", "телегу" -> "телега")
+        if raw_query.endswith("у") and len(raw_query) > 2:
+            base_a = raw_query[:-1] + "а"
+            base_none = raw_query[:-1]
+            queries.append(base_a)
+            queries.append(base_none)
+            if base_a in APP_ALIASES:
+                queries.extend(APP_ALIASES[base_a])
+
+        # Добавляем транслитерацию
+        tr = self._to_translit(raw_query)
+        if tr not in queries:
+            queries.append(tr)
+        if alt_name:
+            norm_alt = self._normalize(alt_name)
+            if norm_alt not in queries:
+                queries.append(norm_alt)
 
         candidates = self._get_candidates()
         if not candidates:
             return None
 
-        names = [item["name"] for item in candidates]
+        best_candidate = None
+        best_score = 0
 
-        best_main = process.extractOne(app_name_norm, names, scorer=fuzz.token_sort_ratio)
-        best_alt = process.extractOne(alt_name_norm, names, scorer=fuzz.token_sort_ratio) if alt_name_norm else None
-
-        best_name, best_score = best_main or ("", 0)
-        if best_alt and best_alt[1] > best_score:
-            best_name, best_score = best_alt
-
-        print(f"[FileSearch] find_app: main='{app_name_norm}', alt='{alt_name_norm}' → '{best_name}' ({best_score}%)")
-
-        if best_score < 70:
-            return None
-
-        matched = [item for item in candidates if item["name"] == best_name]
-        if not matched:
-            return None
-
-        def priority(item: dict) -> int:
-            p = item["path"].lower()
+        for cand in candidates:
+            c_name = cand["name"]
             score = 0
-            if item["ext"] == ".exe":
-                score += 50
-            if "program files" in p:
-                score += 30
-            if "desktop" in p:
-                score += 10
-            if "appdata" in p:
+
+            for q in queries:
+                q_norm = self._normalize(q)
+                if not q_norm:
+                    continue
+
+                # Точное совпадение
+                if c_name == q_norm or cand["raw_name"] == q_norm:
+                    score = max(score, 100)
+                # Вхождение целого слова или фразы
+                elif f" {q_norm} " in f" {c_name} ":
+                    score = max(score, 95)
+                elif c_name.startswith(q_norm) or q_norm in c_name:
+                    score = max(score, 88)
+                else:
+                    sort_ratio = fuzz.token_sort_ratio(q_norm, c_name)
+                    set_ratio = fuzz.token_set_ratio(q_norm, c_name)
+                    score = max(score, max(sort_ratio, set_ratio))
+
+            # Бонус за ярлыки (.lnk, .url), так как они указывают на основное приложение
+            if cand["ext"] in (".lnk", ".url"):
                 score += 5
-            return score
+            if cand.get("tier") == 1:
+                score += 5
 
-        matched.sort(key=priority, reverse=True)
-        result = matched[0]["path"]
-        print(f"[FileSearch] → Путь приложения: {result}")
+            if score > best_score:
+                best_score = score
+                best_candidate = cand
 
-        idx = self._load_index()
-        idx[self._normalize(best_name)] = result
-        self._save_index()
+        if best_candidate and best_score >= 80:
+            print(f"[FileSearch] find_app: query='{raw_query}' -> '{best_candidate['name']}' ({best_score}%)")
+            print(f"[FileSearch] -> Путь приложения: {best_candidate['path']}")
 
-        return result
+            idx = self._load_index()
+            idx[raw_query] = best_candidate["path"]
+            self._save_index()
+            return best_candidate["path"]
 
+        print(f"[FileSearch] find_app: query='{raw_query}' не найден (лучший: {best_score}%)")
+        return None
 
     def find_folder(self, folder_name: str) -> str | None:
         name_orig = self._normalize(folder_name)
         name_lat = self._to_translit(folder_name)
 
-        print(f"[FileSearch] find_folder: '{name_orig}' / '{name_lat}'")
+        user = os.environ.get("USERNAME", "")
+        folder_paths = [
+            os.path.expandvars("%USERPROFILE%/Desktop"),
+            os.path.expandvars("%USERPROFILE%/Downloads"),
+            os.path.expandvars("%USERPROFILE%/Documents"),
+            f"C:/Users/{user}",
+            "E:/",
+            "D:/",
+            "C:/",
+        ]
 
         folder_candidates = []
-
-        for search_path in get_search_paths():
+        for search_path in folder_paths:
             if not os.path.exists(search_path):
                 continue
-            print(f"[FileSearch] Сканирую папки: {search_path}")
-
-            for root, dirs, _ in self._safe_walk(search_path):
+            for root, dirs, _ in self._safe_walk(search_path, max_depth=2):
                 for directory in dirs:
                     dir_norm = self._normalize(directory)
                     dir_lat = self._to_translit(directory)
@@ -205,8 +294,6 @@ class FileSearch:
                         "path": os.path.join(root, directory),
                     })
 
-        print(f"[FileSearch] Кандидатов папок: {len(folder_candidates)}")
-
         if not folder_candidates:
             return None
 
@@ -215,8 +302,6 @@ class FileSearch:
 
         lat_names = [item["name_lat"] for item in folder_candidates]
         best_lat = process.extractOne(name_lat, lat_names, scorer=fuzz.token_sort_ratio)
-
-        print(f"[FileSearch] Вариант orig: '{best_orig}', lat: '{best_lat}'")
 
         best_name = None
         best_score = 0
@@ -228,10 +313,7 @@ class FileSearch:
             best_name, best_score = best_lat
             use_orig = False
 
-        print(f"[FileSearch] Лучший fuzzy: '{best_name}' ({best_score}%)")
-
-        if best_score < 75:
-            print(f"[FileSearch] Слишком низкий score, не нашёл")
+        if best_score < 65:
             return None
 
         if use_orig:
@@ -244,5 +326,5 @@ class FileSearch:
 
         matched.sort(key=lambda x: len(x["path"]))
         result = matched[0]["path"]
-        print(f"[FileSearch] → Путь папки: {result}")
+        print(f"[FileSearch] -> Путь папки: {result}")
         return result

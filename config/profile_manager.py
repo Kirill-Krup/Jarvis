@@ -15,7 +15,7 @@ class ProfileManager:
             return
         self._config = load_config()
         self._initialized = True
-        print(f"Профиль загружен: {self._config['name']} ✓")
+        print(f"Профиль загружен: {self._config.get('name', 'Денис')}")
 
     @property
     def current(self) -> dict:
@@ -23,11 +23,11 @@ class ProfileManager:
 
     @property
     def honorific(self) -> str:
-        return self._config["honorific"]
+        return self._config.get("honorific", "сэр")
 
     @property
     def name(self) -> str:
-        return self._config["name"]
+        return self._config.get("name", "Денис")
 
     def reload(self):
         self._config = load_config()

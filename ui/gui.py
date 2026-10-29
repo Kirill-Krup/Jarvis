@@ -1,4 +1,5 @@
 import os
+import datetime
 import tkinter as tk
 from tkinter import ttk
 from config.autostart import enable_autostart, disable_autostart, is_autostart_enabled
@@ -99,50 +100,34 @@ class SplashScreen:
             "Jarvis.Horizontal.TProgressbar",
             troughcolor="#060d16",
             background="#1a7fbf",
+            darkcolor="#1a7fbf",
+            lightcolor="#2a9fd6",
             bordercolor="#060d16",
-            lightcolor="#2aa8f5",
-            darkcolor="#0d5a8a",
-            thickness=6,
+            thickness=3,
         )
-        self._bar = ttk.Progressbar(
+
+        self._progress = ttk.Progressbar(
             bottom, style="Jarvis.Horizontal.TProgressbar",
-            orient="horizontal", maximum=100, mode="determinate",
+            orient="horizontal", mode="determinate",
+            maximum=100,
         )
-        self._bar.pack(fill="x", padx=30, pady=(6, 0))
+        self._progress.pack(fill="x", padx=30, pady=(6, 12))
 
-    def _next_frame(self):
-        if not self._running or not self._cap:
-            return
-        ret, frame = self._cap.read()
-        if not ret:
-            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            self._win.after(33, self._next_frame)
-            return
-        frame = cv2.resize(frame, (self.WIDTH, self.HEIGHT))
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = (frame * 0.35).clip(0, 255).astype("uint8")
-        self._photo = ImageTk.PhotoImage(Image.fromarray(frame))
-        self.canvas.itemconfig(self._video_item, image=self._photo)
-        self.canvas.tag_lower("video_bg")
-        self._win.after(33, self._next_frame)
-
-    def update_progress(self, percent: int, status: str):
-        self._win.after(0, self._apply_update, int(percent), status)
-
-    def _apply_update(self, percent: int, status: str):
-        self._bar["value"] = percent
+    def update_progress(self, percent: int, text: str):
         self._percent_var.set(f"{percent} %")
-        self._status_var.set(f"▸  {status}")
+        self._status_var.set(text)
+        self._progress["value"] = percent
+        self._win.update_idletasks()
 
     def _start_video(self):
-        path = os.path.normpath(os.path.join(_ASSETS, "backvid.mp4"))
         print(f"[VIDEO] CV2_AVAILABLE = {CV2_AVAILABLE}")
+        if not CV2_AVAILABLE:
+            return
+
+        path = os.path.normpath(os.path.join(_ASSETS, "backvid.mp4"))
         print(f"[VIDEO] path          = {path!r}")
         print(f"[VIDEO] exists        = {os.path.exists(path)}")
 
-        if not CV2_AVAILABLE:
-            print("[VIDEO] Пропуск: cv2 не установлен (pip install opencv-python)")
-            return
         if not os.path.exists(path):
             print("[VIDEO] Пропуск: файл не найден")
             return
@@ -151,6 +136,31 @@ class SplashScreen:
         print(f"[VIDEO] cap.isOpened  = {self._cap.isOpened()}")
         if self._cap.isOpened():
             self._next_frame()
+
+    def _next_frame(self):
+        if not self._running or self._cap is None:
+            return
+
+        ret, frame = self._cap.read()
+        if not ret:
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = self._cap.read()
+            if not ret:
+                return
+
+        frame = cv2.resize(frame, (self.WIDTH, self.HEIGHT))
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        dim = frame.astype("float32") * 0.35
+        frame = dim.clip(0, 255).astype("uint8")
+
+        img = Image.fromarray(frame)
+        self._photo = ImageTk.PhotoImage(image=img)
+
+        self.canvas.itemconfig(self._video_item, image=self._photo)
+        self.canvas.tag_lower(self._video_item)
+
+        self._win.after(33, self._next_frame)
 
     def destroy(self):
         self._running = False
@@ -162,12 +172,13 @@ class SplashScreen:
 
 class MainWindow:
     def __init__(self, root: tk.Tk, profile_name: str,
-                 honorific: str, on_exit=None):
-        self.root    = root
+                 honorific: str, on_exit=None, on_command=None):
+        self.root = root
         self.on_exit = on_exit
+        self.on_command = on_command
 
-        self.root.title("JARVIS")
-        self.root.geometry("900x520")
+        self.root.title("JARVIS — Панель управления")
+        self.root.geometry("1000x640")
         self.root.configure(bg="#070d17")
         self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
@@ -179,20 +190,20 @@ class MainWindow:
         container = tk.Frame(self.root, bg="#070d17")
         container.pack(fill="both", expand=True)
 
-        sidebar = tk.Frame(container, bg="#040912", width=160)
+        sidebar = tk.Frame(container, bg="#040912", width=170)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
         tk.Label(
             sidebar, text="J.A.R.V.I.S",
-            font=("Courier New", 13, "bold"),
+            font=("Courier New", 14, "bold"),
             fg="#1a7fbf", bg="#040912"
-        ).pack(padx=16, pady=(16, 8), anchor="w")
+        ).pack(padx=16, pady=(16, 4), anchor="w")
 
         tk.Label(
             sidebar, text=f"{name}\n{honorific}",
-            font=("Courier New", 8),
-            fg="#1e3d5a", bg="#040912", justify="left"
+            font=("Courier New", 9),
+            fg="#4e729a", bg="#040912", justify="left"
         ).pack(padx=16, pady=(0, 16), anchor="w")
 
         tk.Frame(sidebar, bg="#0d2035", height=1).pack(fill="x", pady=(0, 8))
@@ -216,13 +227,13 @@ class MainWindow:
                 activebackground="#1a7fbf",
                 relief="flat", anchor="w",
                 command=lambda k=page_key: self.show_page(k),
-                padx=16, pady=6,
+                padx=16, pady=8,
             )
             btn.pack(fill="x")
             return btn
 
         self._nav_buttons = {}
-        self._nav_buttons["home"] = add_nav_button("Главная", "home")
+        self._nav_buttons["home"] = add_nav_button("Монитор речи", "home")
         self._nav_buttons["settings"] = add_nav_button("Настройки", "settings")
         self._nav_buttons["logs"] = add_nav_button("Логи", "logs")
 
@@ -236,42 +247,182 @@ class MainWindow:
             activebackground="#a12c2c",
             relief="flat", anchor="w",
             command=self.quit,
-            padx=16, pady=6,
+            padx=16, pady=8,
         ).pack(fill="x", side="bottom", pady=12)
 
         self.show_page("home")
 
     def _build_home_page(self, parent: tk.Frame) -> tk.Frame:
         frame = tk.Frame(parent, bg="#070d17")
-        # ❌ убрать place() отсюда
+
+        # 1. Верхняя панель заголовка и статуса
+        top_bar = tk.Frame(frame, bg="#070d17")
+        top_bar.pack(fill="x", padx=16, pady=(12, 6))
 
         tk.Label(
-            frame, text="СИСТЕМЫ В НОРМЕ",
-            font=("Courier New", 16, "bold"),
+            top_bar, text="МОНИТОРИНГ РЕЧИ И ВЫПОЛНЕНИЯ",
+            font=("Courier New", 13, "bold"),
             fg="#1a7fbf", bg="#070d17"
-        ).pack(pady=(32, 8))
+        ).pack(side="left")
 
-        self._home_status = tk.StringVar(value="Ожидаю голосовую команду...")
+        self._home_status = tk.StringVar(value="Системы в норме. Ожидаю голосовую команду...")
         tk.Label(
-            frame, textvariable=self._home_status,
-            font=("Courier New", 10),
-            fg="#9aa5c0", bg="#070d17"
-        ).pack(pady=(0, 24))
+            top_bar, textvariable=self._home_status,
+            font=("Courier New", 9, "bold"),
+            fg="#38d39f", bg="#070d17"
+        ).pack(side="right")
 
-        info = (
-            "• Голосовой движок активен\n"
-            "• Микрофон подключен\n"
-            "• Модуль команд загружен\n"
-            "• Скажи 'Джарвис' чтобы активировать"
+        tk.Frame(frame, bg="#0d2035", height=1).pack(fill="x", padx=16, pady=(0, 8))
+
+        # 2. Информационные карточки
+        cards_frame = tk.Frame(frame, bg="#040912", highlightbackground="#0d2035", highlightthickness=1)
+        cards_frame.pack(fill="x", padx=16, pady=4)
+
+        # РЯД 1: ВСЁ ЧТО СЛЫШИТ МИКРОФОН (сырая распознанная фраза Vosk)
+        row1 = tk.Frame(cards_frame, bg="#040912")
+        row1.pack(fill="x", padx=12, pady=(8, 4))
+        tk.Label(
+            row1, text="🎙️ СЛЫШИТ (микрофон):",
+            font=("Courier New", 9, "bold"), fg="#ffb86c", bg="#040912", width=22, anchor="w"
+        ).pack(side="left")
+        self._raw_heard_var = tk.StringVar(value="—")
+        tk.Label(
+            row1, textvariable=self._raw_heard_var,
+            font=("Courier New", 10), fg="#f1fa8c", bg="#040912", anchor="w"
+        ).pack(side="left", fill="x", expand=True)
+
+        # РЯД 2: ЧТО ВЫПОЛНЯЕТСЯ
+        row2 = tk.Frame(cards_frame, bg="#040912")
+        row2.pack(fill="x", padx=12, pady=4)
+        tk.Label(
+            row2, text="⚡ КОМАНДА:",
+            font=("Courier New", 9, "bold"), fg="#50fa7b", bg="#040912", width=22, anchor="w"
+        ).pack(side="left")
+        self._executed_cmd_var = tk.StringVar(value="—")
+        tk.Label(
+            row2, textvariable=self._executed_cmd_var,
+            font=("Courier New", 10, "bold"), fg="#ffffff", bg="#040912", anchor="w"
+        ).pack(side="left", fill="x", expand=True)
+
+        # РЯД 3: ОТВЕТ ДЖАРВИСА
+        row3 = tk.Frame(cards_frame, bg="#040912")
+        row3.pack(fill="x", padx=12, pady=(4, 8))
+        tk.Label(
+            row3, text="💬 ОТВЕТ:",
+            font=("Courier New", 9, "bold"), fg="#8be9fd", bg="#040912", width=22, anchor="w"
+        ).pack(side="left")
+        self._jarvis_reply_var = tk.StringVar(value="—")
+        tk.Label(
+            row3, textvariable=self._jarvis_reply_var,
+            font=("Courier New", 9), fg="#8be9fd", bg="#040912", anchor="w"
+        ).pack(side="left", fill="x", expand=True)
+
+        # 3. Панель ручного тестирования команд
+        test_panel = tk.Frame(frame, bg="#070d17")
+        test_panel.pack(fill="x", padx=16, pady=(10, 4))
+
+        tk.Label(
+            test_panel, text="РУЧНОЙ ВВОД КОМАНДЫ (ДЛЯ ТЕСТА):",
+            font=("Courier New", 8, "bold"), fg="#4e729a", bg="#070d17"
+        ).pack(anchor="w", pady=(0, 2))
+
+        input_row = tk.Frame(test_panel, bg="#070d17")
+        input_row.pack(fill="x")
+
+        self._manual_cmd_var = tk.StringVar()
+        self._cmd_entry = tk.Entry(
+            input_row, textvariable=self._manual_cmd_var,
+            font=("Courier New", 10), bg="#040912", fg="#c3d4ff",
+            insertbackground="#1a7fbf", relief="flat",
+            highlightbackground="#0d2035", highlightthickness=1
         )
+        self._cmd_entry.pack(side="left", fill="x", expand=True, padx=(0, 8), ipady=4)
+        self._cmd_entry.bind("<Return>", lambda e: self._on_send_manual_cmd())
+
+        tk.Button(
+            input_row, text="Выполнить",
+            font=("Courier New", 9, "bold"), fg="#ffffff", bg="#1a7fbf",
+            activeforeground="#ffffff", activebackground="#0f5c8a",
+            relief="flat", padx=14, pady=4,
+            command=self._on_send_manual_cmd
+        ).pack(side="right")
+
+        # 4. Быстрые кнопки тестирования
+        quick_frame = tk.Frame(frame, bg="#070d17")
+        quick_frame.pack(fill="x", padx=16, pady=(6, 8))
+
+        quick_cmds = [
+            ("📂 Проводник", "открой проводник"),
+            ("🌐 Браузер", "открой браузер"),
+            ("💬 Телеграм", "открой телегу"),
+            ("💲 Курс доллара", "курс доллара"),
+            ("🔊 Звук 10%", "звук 10"),
+            ("🔊 Звук 50%", "звук 50"),
+            ("🔊 Звук 100%", "звук 100"),
+        ]
+        for label, qcmd in quick_cmds:
+            b = tk.Button(
+                quick_frame, text=label,
+                font=("Courier New", 8), fg="#c3d4ff", bg="#0a1628",
+                activeforeground="#ffffff", activebackground="#1a7fbf",
+                relief="flat", padx=6, pady=3,
+                command=lambda c=qcmd: self._send_quick_cmd(c)
+            )
+            b.pack(side="left", padx=2)
+
+        # 5. Журнал событий
         tk.Label(
-            frame, text=info,
-            font=("Courier New", 9),
-            fg="#5f6b88", bg="#070d17",
-            justify="left"
-        ).pack(pady=(0, 24), anchor="center")
+            frame, text="ЖУРНАЛ СОБЫТИЙ И РАСПОЗНАВАНИЯ:",
+            font=("Courier New", 8, "bold"), fg="#4e729a", bg="#070d17"
+        ).pack(anchor="w", padx=16, pady=(4, 2))
+
+        history_frame = tk.Frame(frame, bg="#040912", highlightbackground="#0d2035", highlightthickness=1)
+        history_frame.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+
+        self._history_text = tk.Text(
+            history_frame, bg="#040912", fg="#1a7fbf",
+            font=("Courier New", 9), relief="flat", state="disabled",
+            wrap="word", padx=10, pady=8,
+        )
+        sb = tk.Scrollbar(history_frame, command=self._history_text.yview, bg="#040912")
+        self._history_text.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self._history_text.pack(side="left", fill="both", expand=True)
 
         return frame
+
+    def _on_send_manual_cmd(self):
+        cmd = self._manual_cmd_var.get().strip()
+        if not cmd:
+            return
+        self._manual_cmd_var.set("")
+        if self.on_command:
+            self.on_command(cmd)
+
+    def _send_quick_cmd(self, cmd_text: str):
+        if self.on_command:
+            self.on_command(cmd_text)
+
+    def update_speech_info(self, raw_text: str, command: str = ""):
+        def _do():
+            self._raw_heard_var.set(raw_text or "—")
+            self._executed_cmd_var.set(command or "—")
+            t_now = datetime.datetime.now().strftime("%H:%M:%S")
+            self._append_history(f"[{t_now}] 🎙️ СЛЫШАЛ: '{raw_text}'  ->  КОМАНДА: '{command}'")
+        self.root.after(0, _do)
+
+    def update_execution_info(self, response: str, intent_info: str = ""):
+        def _do():
+            self._jarvis_reply_var.set(response or "—")
+            t_now = datetime.datetime.now().strftime("%H:%M:%S")
+            self._append_history(f"[{t_now}] 💬 ОТВЕТ: {response}")
+        self.root.after(0, _do)
+
+    def _append_history(self, line: str):
+        self._history_text.configure(state="normal")
+        self._history_text.insert("end", f"{line}\n")
+        self._history_text.configure(state="disabled")
+        self._history_text.see("end")
 
     def _build_settings_page(self, parent: tk.Frame,
                              name: str, honorific: str) -> tk.Frame:
@@ -351,7 +502,7 @@ class MainWindow:
         frame = tk.Frame(parent, bg="#070d17")
 
         tk.Label(
-            frame, text="ЛОГИ",
+            frame, text="ЛОГИ СИСТЕМЫ",
             font=("Courier New", 14, "bold"),
             fg="#1a7fbf", bg="#070d17"
         ).pack(pady=(16, 8))
@@ -412,7 +563,9 @@ class MainWindow:
     def _do_show(self):
         self.root.deiconify()
         self.root.lift()
+        self.root.attributes("-topmost", True)
         self.root.focus_force()
+        self.root.after(800, lambda: self.root.attributes("-topmost", False))
 
     def hide(self):
         self.root.withdraw()

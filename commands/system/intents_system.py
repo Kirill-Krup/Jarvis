@@ -24,20 +24,20 @@ def handle_lock_pc(cmd, ctx):
 
 
 def handle_task_manager(cmd, ctx):
-    subprocess.Popen("taskmgr")
+    subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Start-Process taskmgr.exe"], creationflags=subprocess.CREATE_NO_WINDOW)
     return ctx.reply("Открываю диспетчер задач")
 
 
 def handle_explorer(cmd, ctx):
-    subprocess.Popen("explorer")
+    subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Start-Process explorer.exe -ArgumentList 'shell:MyComputerFolder'"], creationflags=subprocess.CREATE_NO_WINDOW)
     return ctx.reply("Открываю проводник")
 
 
 def handle_windows_settings(cmd, ctx):
-    os.system("start ms-settings:")
+    subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Start-Process ms-settings:"], creationflags=subprocess.CREATE_NO_WINDOW)
     return ctx.reply("Открываю настройки Windows")
 
 
 def handle_control_panel(cmd, ctx):
-    subprocess.Popen("control")
+    subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", "Start-Process control.exe"], creationflags=subprocess.CREATE_NO_WINDOW)
     return ctx.reply("Открываю панель управления")

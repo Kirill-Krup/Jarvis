@@ -1,3 +1,4 @@
+import time
 import json
 import re
 import requests
@@ -265,7 +266,21 @@ class OllamaHandler:
         )
         return self._parse_intent(raw, user_text)
 
+    def is_available(self) -> bool:
+        now = time.time()
+        if hasattr(self, "_last_check") and (now - self._last_check < 15):
+            return getattr(self, "_is_up", False)
+        self._last_check = now
+        try:
+            r = requests.get(f"{self.base_url}/api/tags", timeout=0.25)
+            self._is_up = (r.status_code == 200)
+        except Exception:
+            self._is_up = False
+        return self._is_up
+
     def chat(self, user_text: str) -> str:
+        if not self.is_available():
+            return None
         self._chat_history.append({"role": "user", "content": user_text})
 
         payload = {

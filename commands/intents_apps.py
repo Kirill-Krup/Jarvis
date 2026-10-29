@@ -1,3 +1,11 @@
+import subprocess
+def open_browser_url(url: str):
+    try:
+        cmd = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", f"Start-Process '{url}'"]
+        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
+    except Exception:
+        import webbrowser
+        open_browser_url(url)
 import os
 
 
@@ -30,12 +38,12 @@ def handle_open(cmd, ctx):
 
     if app_name in ["браузер", "интернет", "сеть"]:
         import webbrowser
-        webbrowser.open("https://google.com")
+        open_browser_url("https://google.com")
         return ctx.reply("Открываю браузер")
 
     if app_name in KNOWN_SITES:
         import webbrowser
-        webbrowser.open(KNOWN_SITES[app_name])
+        open_browser_url(KNOWN_SITES[app_name])
         return ctx.reply(f"Открываю {app_name}")
 
     if app_name in APP_WEB_FALLBACK:
@@ -90,7 +98,7 @@ def handle_folder(cmd, ctx):
         os.startfile(cached_path)
         return ctx.reply(f"Открываю папку {folder_name}")
 
-    print(f"🔍 Ищу папку: {folder_name}...")
+    print(f"[SEARCH] Ищу папку: {folder_name}...")
     path = ctx.file_search.find_folder(folder_name)
 
     if path:

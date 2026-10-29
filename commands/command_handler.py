@@ -1,3 +1,10 @@
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import datetime
 import re
 
@@ -26,7 +33,7 @@ from nlu.numbers import ru_numbers_to_digits
 SYSTEM_MAX_WORDS = 4     # SystemHandler (подстрока) только для коротких фраз
 FUZZY_MAX_WORDS = 3      # нечёткое совпадение только для коротких фраз
 FUZZY_MIN_SCORE = 85     # порог fuzz.ratio (0-100)
-ACT_MIN_CONFIDENCE = 0.6   # выше: выполняем команду по намерению
+ACT_MIN_CONFIDENCE = 0.50   # выше: выполняем команду по намерению
 CHAT_MIN_CONFIDENCE = 0.8  # выше: это разговор, ключевые слова не проверяем
 
 class CommandContext:
@@ -60,7 +67,7 @@ class CommandHandler:
     def __init__(self, speaker):
         self.file_search    = FileSearch()
         self.system_handler = SystemHandler()
-        self.app_launcher   = AppLauncher(self.file_search)
+        self.app_launcher   = AppLauncher(self.file_search, speaker=speaker)
         self.web_handler    = WebHandler()
         self.volume_control = VolumeControl()
         self.profile        = ProfileManager()
@@ -135,7 +142,10 @@ class CommandHandler:
             # Звук
             ("выключи звук", intents_volume.handle_mute),
             ("включи звук", intents_volume.handle_unmute),
+            ("громкость на", intents_volume.handle_volume_set),
             ("громкость", intents_volume.handle_volume_set),
+            ("звук на", intents_volume.handle_volume_set),
+            ("звук", intents_volume.handle_volume_set),
             ("громче", intents_volume.handle_volume_up),
             ("тише", intents_volume.handle_volume_down),
 
@@ -215,13 +225,49 @@ class CommandHandler:
         self._sorted_map = sorted(
             self.command_map, key=lambda item: len(item[0]), reverse=True)
 
-        print("CommandHandler готов ✓")
+        print("CommandHandler готов [OK]")
 
     # ------------------------------------------------------------ разбор команды
 
     def handle(self, text: str) -> str:
         """Сначала понимаем намерение (классификатор), ключевые слова — запасной путь."""
-        cmd = Command(text)
+        # Vosk часто даёт числа словами («звук десять» -> «звук 10»)
+        text_with_digits = ru_numbers_to_digits(text)
+        cmd = Command(text_with_digits)
+        clean_text = self._clean(cmd.text_lower)
+
+        # 1. Приветствия — отвечаем голосом, никогда не гуглим
+        if clean_text in ("привет", "здравствуй", "здравствуйте", "доброе утро", "добрый день", "добрый вечер", "хай", "салют"):
+            return self.ctx.reply(f"Здравствуйте, {self.profile.name}")
+
+        # 2. Вопросы о статусе
+        if clean_text in ("как дела", "как ты", "что делаешь", "ты тут", "ты здесь", "как жизнь"):
+            return self.ctx.reply("Все системы функционируют в штатном режиме")
+
+        # 3. Благодарность
+        if clean_text in ("спасибо", "благодарю", "от души"):
+            return self.ctx.reply("Всегда рад помочь")
+
+        # 4. Команды управления громкостью («звук 10», «звук десять», «звук на 50», «громкость 30»)
+        if clean_text.startswith("звук") or clean_text.startswith("громкость"):
+            if any(w in clean_text for w in ("максимум", "минимум", "полную", "всю", "сто", "ноль")) or re.search(r'\d+', clean_text):
+                return intents_volume.handle_volume_set(cmd, self.ctx)
+
+        # 5. Мгновенное открытие приложения, если сказано только его название («телега», «телеграм», «стим», «дискорд»)
+        if clean_text in self.app_launcher.memory.get("apps", {}):
+            return self.app_launcher.launch(clean_text, self.profile.honorific)
+        if clean_text.endswith("у") and len(clean_text) > 2:
+            base_a = clean_text[:-1] + "а"
+            if base_a in self.app_launcher.memory.get("apps", {}):
+                return self.app_launcher.launch(clean_text, self.profile.honorific)
+
+        # 6. Если в фразе есть имя приложения из памяти («такой телеграмм», «открой мне стим», «запусти-ка проводник»)
+        words = clean_text.split()
+        if not any(stop in clean_text for stop in ("закрой", "закрыть", "выключи", "удали", "стоп")):
+            for w in sorted(self.app_launcher.memory.get("apps", {}).keys(), key=len, reverse=True):
+                if len(w) >= 3 and (w in words or f" {w} " in f" {clean_text} "):
+                    return self.app_launcher.launch(w, self.profile.honorific)
+
         result = self.intent_service.classify(cmd.text)
         print(f"[NLU] intent={result.intent}  target={result.target_en}  "
               f"query={result.params.get('query') or result.target_ru}  "
@@ -279,7 +325,31 @@ class CommandHandler:
             return self.ctx.reply("Не получилось выполнить команду")
 
     def _chat(self, cmd, result) -> str:
-        return result.chat_reply or self.ollama.chat(cmd.text)
+        if result.chat_reply:
+            return result.chat_reply
+        if self.ollama.is_available():
+            reply = self.ollama.chat(cmd.text)
+            if reply:
+                return reply
+
+        # Если Ollama не запущена, открываем поиск ТОЛЬКО по прямому поисковому запросу!
+        search_words = ("загугли", "прогугли", "погугли", "поищи", "найди в интернете", "найди в сети", "поиск в гугле", "что такое", "кто такой")
+        if any(w in cmd.text_lower for w in search_words):
+            clean = self._clean(cmd.text_lower)
+            for w in search_words:
+                clean = clean.replace(w, "").strip()
+            url = f"https://www.google.com/search?q={clean.replace(' ', '+')}"
+            try:
+                import subprocess
+                cmd_p = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", f"Start-Process '{url}'"]
+                subprocess.Popen(cmd_p, creationflags=subprocess.CREATE_NO_WINDOW)
+            except Exception:
+                import webbrowser
+                webbrowser.open(url)
+            return self.ctx.reply(f"Ищу информацию по запросу «{clean}» в браузере")
+
+        # При шуме или нераспознанной речи:
+        return self.ctx.reply("Не совсем понял команду. Повторите, пожалуйста")
 
     # --------------------------------------------- запасной разбор по ключевым словам
 
@@ -324,6 +394,6 @@ class CommandHandler:
                 best_score, best_func = score, func
 
         if best_score >= FUZZY_MIN_SCORE:
-            print(f"[FuzzyMatch] '{match_text}' → score={best_score}")
+            print(f"[FuzzyMatch] '{match_text}' -> score={best_score}")
             return best_func
         return None

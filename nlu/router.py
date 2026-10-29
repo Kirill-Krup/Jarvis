@@ -104,6 +104,7 @@ class IntentRouter:
             "volume_down": intents_volume.handle_volume_down,
             "mute": intents_volume.handle_mute,
             "unmute": intents_volume.handle_unmute,
+            "volume_set": intents_volume.handle_volume_set,
             "brightness_up": intents_display.handle_brightness_up,
             "brightness_down": intents_display.handle_brightness_down,
             "brightness_set": intents_display.handle_brightness_set,

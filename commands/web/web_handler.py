@@ -1,4 +1,13 @@
 import webbrowser
+import subprocess
+
+def open_browser_url(url: str):
+    try:
+        cmd = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", f"Start-Process '{url}'"]
+        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
+    except Exception:
+        open_browser_url(url)
+
 
 KNOWN_SITES = {
     "ютуб": "https://youtube.com",
@@ -49,21 +58,21 @@ class WebHandler:
         query = query.lower().strip()
 
         if query in KNOWN_SITES:
-            webbrowser.open(KNOWN_SITES[query])
+            open_browser_url(KNOWN_SITES[query])
             return f"Открываю {query}, {honorific}"
 
         for site_name, url in KNOWN_SITES.items():
             if site_name in query or query in site_name:
-                webbrowser.open(url)
+                open_browser_url(url)
                 return f"Открываю {site_name}, {honorific}"
 
         search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
-        webbrowser.open(search_url)
+        open_browser_url(search_url)
         return f"Ищу '{query}' в браузере, {honorific}"
 
     def open_web_fallback(self, app_name: str, honorific: str) -> str:
         url = APP_WEB_FALLBACK.get(app_name.lower().strip())
         if url:
-            webbrowser.open(url)
+            open_browser_url(url)
             return f"Приложение не найдено, открываю веб-версию {app_name}, {honorific}"
         return None

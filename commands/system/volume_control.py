@@ -1,3 +1,10 @@
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
@@ -12,7 +19,7 @@ class VolumeControl:
                 IAudioEndpointVolume._iid_, CLSCTX_ALL, None
             )
             self.volume = cast(interface, POINTER(IAudioEndpointVolume))
-            print("VolumeControl готов ✓")
+            print("VolumeControl готов [OK]")
         except Exception as e:
             print(f"VolumeControl ошибка: {e}")
             self.volume = None

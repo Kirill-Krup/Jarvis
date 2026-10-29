@@ -25,6 +25,7 @@ ACTIONS = {
     "folder:disk_e": ("commands.system.intents_utils", "handle_disk_e", "открой диск e", None),
 
     # поиск и контент
+    "web:currency": ("commands.web.intents_web", "handle_currency", "курс валют", None),
     "web:search": ("commands.web.intents_web", "handle_search", "найди {q}", "Что именно найти?"),
     "web:info": ("commands.web.intents_web", "handle_info_search", "найди информацию {q}", "Какую информацию искать?"),
     "web:video": ("commands.web.intents_web", "handle_video_search", "найди видео {q}", "Какое видео найти?"),
