@@ -1,74 +1,81 @@
-import os
-import subprocess
+import ctypes
 import time
+import subprocess
+
+# Виртуальные коды мультимедийных клавиш Windows
+VK_MEDIA_NEXT_TRACK = 0xB0  # 176
+VK_MEDIA_PREV_TRACK = 0xB1  # 177
+VK_MEDIA_STOP       = 0xB2  # 178
+VK_MEDIA_PLAY_PAUSE = 0xB3  # 179
+
+KEYEVENTF_EXTENDEDKEY = 0x0001
+KEYEVENTF_KEYUP       = 0x0002
 
 
-def _is_youtube_in_browser() -> bool:
-    result = subprocess.run(
-        ['powershell', '-Command',
-         '(Get-Process | Where-Object {$_.MainWindowTitle -match "YouTube"} '
-         '| Select-Object -First 1).MainWindowTitle'],
-        capture_output=True, text=True
-    )
-    return bool(result.stdout.strip())
-
-
-def _focus_browser():
-    result = subprocess.run(
-        ['powershell', '-Command',
-         '(Get-Process | Where-Object {$_.MainWindowTitle -match "YouTube|Chrome|Firefox|Edge"} '
-         '| Select-Object -First 1).MainWindowTitle'],
-        capture_output=True, text=True
-    )
-    title = result.stdout.strip()
-    if title:
-        subprocess.run(
-            ['powershell', '-Command',
-             f'(New-Object -ComObject WScript.Shell).AppActivate("{title}")'],
-            capture_output=True
-        )
-        time.sleep(0.3)
+def _send_media_key(vk_code: int):
+    """Отправляет глобальное событие мультимедийной клавиши Windows.
+    
+    Работает со всеми современными браузерами (Chrome, Яндекс Браузер, Edge, Firefox),
+    а также настольными плеерами (Spotify, AIMP, Windows Media, VLC и др.)
+    даже когда они работают в фоновом режиме.
+    """
+    try:
+        user32 = ctypes.windll.user32
+        user32.keybd_event(vk_code, 0, KEYEVENTF_EXTENDEDKEY, 0)
+        time.sleep(0.05)
+        user32.keybd_event(vk_code, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0)
         return True
+    except Exception as e:
+        print(f"[Media] Ошибка отправки медиа-клавиши: {e}")
+        return False
+
+
+def _try_browser_tab_pause():
+    """Дополнительная попытка: если браузер на переднем плане, отправить пробел или 'k'."""
+    try:
+        import pyautogui
+        # Проверяем заголовок активного окна
+        user32 = ctypes.windll.user32
+        h_wnd = user32.GetForegroundWindow()
+        length = user32.GetWindowTextLengthW(h_wnd)
+        buff = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(h_wnd, buff, length + 1)
+        title = buff.value.lower()
+
+        browser_words = ["chrome", "браузер", "edge", "firefox", "opera", "youtube", "музыка", "yandex"]
+        if any(w in title for w in browser_words):
+            pyautogui.press('space')
+            return True
+    except Exception:
+        pass
     return False
 
 
 def handle_media_pause(cmd, ctx):
-    if _is_youtube_in_browser() and _focus_browser():
-        import pyautogui
-        pyautogui.press('k')
-        return ctx.reply("Пауза")
-
-    os.system(
-        'powershell -command '
-        '"(New-Object -ComObject WScript.Shell).SendKeys([char]179)"'
-    )
+    """Поставить на паузу."""
+    _send_media_key(VK_MEDIA_PLAY_PAUSE)
     return ctx.reply("Пауза")
 
 
 def handle_media_play(cmd, ctx):
-    if _is_youtube_in_browser() and _focus_browser():
-        import pyautogui
-        pyautogui.press('k')
-        return ctx.reply("Продолжаю воспроизведение")
-
-    os.system(
-        'powershell -command '
-        '"(New-Object -ComObject WScript.Shell).SendKeys([char]179)"'
-    )
+    """Возобновить воспроизведение."""
+    _send_media_key(VK_MEDIA_PLAY_PAUSE)
     return ctx.reply("Продолжаю воспроизведение")
 
 
 def handle_media_next(cmd, ctx):
-    os.system(
-        'powershell -command '
-        '"(New-Object -ComObject WScript.Shell).SendKeys([char]176)"'
-    )
+    """Следующий трек."""
+    _send_media_key(VK_MEDIA_NEXT_TRACK)
     return ctx.reply("Следующий трек")
 
 
 def handle_media_prev(cmd, ctx):
-    os.system(
-        'powershell -command '
-        '"(New-Object -ComObject WScript.Shell).SendKeys([char]177)"'
-    )
+    """Предыдущий трек."""
+    _send_media_key(VK_MEDIA_PREV_TRACK)
     return ctx.reply("Предыдущий трек")
+
+
+def handle_media_stop(cmd, ctx):
+    """Остановить воспроизведение."""
+    _send_media_key(VK_MEDIA_STOP)
+    return ctx.reply("Воспроизведение остановлено")

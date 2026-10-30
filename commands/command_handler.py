@@ -10,18 +10,20 @@ import re
 
 from thefuzz import fuzz
 
-from commands.app_launcher    import AppLauncher
+from commands.app_launcher import AppLauncher
 from commands.system.volume_control import VolumeControl
 from commands.web.web_handler import WebHandler
-from config.profile_manager   import ProfileManager
-from commands.file_search     import FileSearch
+from config.profile_manager import ProfileManager
+from commands.file_search import FileSearch
 from commands.system.system_handler import SystemHandler
-from commands.ollama_handler  import OllamaHandler
+from commands.ollama_handler import OllamaHandler
 
 from commands.web import intents_web, intents_youtube
 from commands import intents_apps
 from commands import intents_media
-from commands.system import intents_system, intents_volume, intents_utils, intents_display, intents_scan
+from commands.system import intents_system, intents_volume, intents_utils, intents_display, intents_scan, intents_connectivity
+from commands import todo_handler
+from commands.profanity_filter import check_profanity
 
 from nlu.intent_service import IntentService
 from nlu.router import IntentRouter
@@ -36,16 +38,17 @@ FUZZY_MIN_SCORE = 85     # порог fuzz.ratio (0-100)
 ACT_MIN_CONFIDENCE = 0.50   # выше: выполняем команду по намерению
 CHAT_MIN_CONFIDENCE = 0.8  # выше: это разговор, ключевые слова не проверяем
 
+
 class CommandContext:
     def __init__(self, speaker, file_search, system_handler,
                  app_launcher, web_handler, volume_control, profile):
-        self.speaker        = speaker
-        self.file_search    = file_search
+        self.speaker = speaker
+        self.file_search = file_search
         self.system_handler = system_handler
-        self.app_launcher   = app_launcher
-        self.web_handler    = web_handler
+        self.app_launcher = app_launcher
+        self.web_handler = web_handler
         self.volume_control = volume_control
-        self.profile        = profile
+        self.profile = profile
 
     def speak(self, text: str) -> str:
         self.speaker.speak(text)
@@ -57,7 +60,7 @@ class CommandContext:
 
 class Command:
     def __init__(self, text: str):
-        self.text       = text
+        self.text = text
         self.text_lower = text.lower().strip()
         self.created_at = datetime.datetime.now()
 
@@ -65,13 +68,13 @@ class Command:
 class CommandHandler:
 
     def __init__(self, speaker):
-        self.file_search    = FileSearch()
+        self.file_search = FileSearch()
         self.system_handler = SystemHandler()
-        self.app_launcher   = AppLauncher(self.file_search, speaker=speaker)
-        self.web_handler    = WebHandler()
+        self.app_launcher = AppLauncher(self.file_search, speaker=speaker)
+        self.web_handler = WebHandler()
         self.volume_control = VolumeControl()
-        self.profile        = ProfileManager()
-        self.speaker        = speaker
+        self.profile = ProfileManager()
+        self.speaker = speaker
 
         self.ollama = OllamaHandler()
         self.intent_service = IntentService(self.ollama)
@@ -94,7 +97,7 @@ class CommandHandler:
             ("найди информацию", intents_web.handle_info_search),
             ("хочу узнать", intents_web.handle_info_search),
 
-            # Веб
+            # Веб & Мультимедиа
             ("открой сайт", intents_web.handle_web),
             ("найди сайт", intents_web.handle_web),
             ("зайди на", intents_web.handle_web),
@@ -102,12 +105,51 @@ class CommandHandler:
             ("найди видео", intents_web.handle_video_search),
             ("найди", intents_web.handle_search),
             ("поиск", intents_web.handle_search),
+            ("хочу посмотреть аниме", intents_web.handle_movie_search),
+            ("посмотреть аниме", intents_web.handle_movie_search),
             ("хочу посмотреть", intents_web.handle_movie_search),
             ("давай посмотрим", intents_web.handle_movie_search),
             ("посмотреть фильм", intents_web.handle_movie_search),
             ("посмотреть сериал", intents_web.handle_movie_search),
             ("включи ютуб", intents_web.handle_youtube),
             ("включи музыку", intents_web.handle_music),
+            ("поставь музыку", intents_web.handle_music),
+            ("запусти музыку", intents_web.handle_music),
+
+            # Погода
+            ("какая завтра будет погода", intents_web.handle_weather),
+            ("какая завтра погода", intents_web.handle_weather),
+            ("какая будет погода", intents_web.handle_weather),
+            ("какая погода", intents_web.handle_weather),
+            ("прогноз погоды", intents_web.handle_weather),
+            ("погода на завтра", intents_web.handle_weather),
+            ("погода", intents_web.handle_weather),
+
+            # To-Do list и напоминания
+            ("добавь в список дел", todo_handler.handle_todo_add),
+            ("добавь в список", todo_handler.handle_todo_add),
+            ("добавь задачу", todo_handler.handle_todo_add),
+            ("озвучь список дел", todo_handler.handle_todo_list),
+            ("покажи список дел", todo_handler.handle_todo_list),
+            ("список дел", todo_handler.handle_todo_list),
+            ("очисти список дел", todo_handler.handle_todo_clear),
+            ("напомни через", todo_handler.handle_todo_remind),
+            ("напомни", todo_handler.handle_todo_remind),
+
+            # Связь (Bluetooth, WiFi)
+            ("включи блютуз", intents_connectivity.handle_bluetooth_on),
+            ("включи bluetooth", intents_connectivity.handle_bluetooth_on),
+            ("выключи блютуз", intents_connectivity.handle_bluetooth_off),
+            ("отключи блютуз", intents_connectivity.handle_bluetooth_off),
+            ("выключи bluetooth", intents_connectivity.handle_bluetooth_off),
+            ("включи вай фай", intents_connectivity.handle_wifi_on),
+            ("включи wifi", intents_connectivity.handle_wifi_on),
+            ("выключи вай фай", intents_connectivity.handle_wifi_off),
+            ("отключи вай фай", intents_connectivity.handle_wifi_off),
+            ("выключи wifi", intents_connectivity.handle_wifi_off),
+            ("включи точку доступа", intents_connectivity.handle_hotspot_on),
+            ("режим в самолете", intents_connectivity.handle_airplane_on),
+            ("режим в самолёте", intents_connectivity.handle_airplane_on),
 
             # Сканирование
             ("быстрая проверка", intents_scan.handle_scan_quick),
@@ -127,17 +169,21 @@ class CommandHandler:
             ("отменить сканирование", intents_scan.handle_scan_cancel),
 
             # Приложения и папки
-            ("закрой папку",  intents_apps.handle_close_folder),
+            ("закрой папку", intents_apps.handle_close_folder),
             ("закрыть папку", intents_apps.handle_close_folder),
-            ("открой папку",  intents_apps.handle_folder),
-            ("папку",         intents_apps.handle_folder),
-            ("папка",         intents_apps.handle_folder),
-            ("открой",             intents_apps.handle_open),
-            ("запусти",            intents_apps.handle_open),
-            ("включи",             intents_apps.handle_open),
+            ("открой папку", intents_apps.handle_folder),
+            ("папку", intents_apps.handle_folder),
+            ("папка", intents_apps.handle_folder),
             ("выключи приложение", intents_apps.handle_close),
-            ("закрой",             intents_apps.handle_close),
-            ("закрыть",            intents_apps.handle_close),
+            ("закрой программу", intents_apps.handle_close),
+            ("закрой приложение", intents_apps.handle_close),
+            ("закрой", intents_apps.handle_close),
+            ("закрыть", intents_apps.handle_close),
+            ("открой программу", intents_apps.handle_open),
+            ("открой приложение", intents_apps.handle_open),
+            ("открой", intents_apps.handle_open),
+            ("запусти", intents_apps.handle_open),
+            ("включи", intents_apps.handle_open),
 
             # Звук
             ("выключи звук", intents_volume.handle_mute),
@@ -161,11 +207,11 @@ class CommandHandler:
             ("перемотка назад", intents_youtube.handle_youtube_backward),
 
             # Медиа
-            ("пауза",            intents_media.handle_media_pause),
-            ("продолжи",         intents_media.handle_media_play),
-            ("следующий трек",   intents_media.handle_media_next),
-            ("следующая песня",  intents_media.handle_media_next),
-            ("предыдущий трек",  intents_media.handle_media_prev),
+            ("пауза", intents_media.handle_media_pause),
+            ("продолжи", intents_media.handle_media_play),
+            ("следующий трек", intents_media.handle_media_next),
+            ("следующая песня", intents_media.handle_media_next),
+            ("предыдущий трек", intents_media.handle_media_prev),
             ("предыдущая песня", intents_media.handle_media_prev),
 
             # Система
@@ -220,8 +266,7 @@ class CommandHandler:
             ("яркость", intents_display.handle_brightness_set),
         ]
 
-        # Длинные (более конкретные) ключи проверяем первыми:
-        # "включи звук" должно сработать раньше, чем "включи".
+        # Длинные ключи первыми
         self._sorted_map = sorted(
             self.command_map, key=lambda item: len(item[0]), reverse=True)
 
@@ -230,8 +275,75 @@ class CommandHandler:
     # ------------------------------------------------------------ разбор команды
 
     def handle(self, text: str) -> str:
-        """Сначала понимаем намерение (классификатор), ключевые слова — запасной путь."""
-        # Vosk часто даёт числа словами («звук десять» -> «звук 10»)
+        """Разбор команды: маты -> мультикоманды -> распознавание намерения -> ключевые слова."""
+        # 0. Проверка на грубость / маты (живой юморной ответ)
+        profanity_reply = check_profanity(text)
+        if profanity_reply:
+            return self.ctx.reply(profanity_reply)
+
+        # Проверяем, не является ли фраза составной ("открой ютуб и телеграм")
+        sub_commands = self._split_multi_command(text)
+        if sub_commands and len(sub_commands) > 1:
+            print(f"[MULTI] Обнаружено несколько команд: {sub_commands}")
+            replies = []
+            for sub_cmd in sub_commands:
+                r = self._handle_single(sub_cmd)
+                if r:
+                    replies.append(r)
+            if replies:
+                return ". ".join(replies)
+
+        return self._handle_single(text)
+
+    def _split_multi_command(self, text: str) -> list[str] | None:
+        """Разбивает фразу типа 'открой ютуб и телеграм' или 'включи музыку и закрой стим'."""
+        text_lower = text.lower().strip()
+
+        # Исключаем поисковые запросы, которые часто содержат "и"
+        search_starts = ("найди", "поищи", "загугли", "что такое", "кто такой", "переведи", "почему", "сколько", "как", "хочу узнать")
+        if any(text_lower.startswith(s) for s in search_starts):
+            return None
+
+        # Разделители команд
+        delimiters = [" а также ", " затем ", " потом ", " и "]
+        chosen_delim = None
+        for d in delimiters:
+            if d in text_lower:
+                chosen_delim = d
+                break
+
+        if not chosen_delim:
+            return None
+
+        parts = [p.strip() for p in text_lower.split(chosen_delim) if p.strip()]
+        if len(parts) < 2:
+            return None
+
+        # Проверяем, нужно ли унаследовать глагол действия из первой части
+        # Например: "открой ютуб и телеграм" -> part 0 = "открой ютуб", part 1 = "телеграм" -> "открой телеграм"
+        # "закрой стим и дискорд" -> "закрой стим", "закрой дискорд"
+        verbs = [
+            "открой", "запусти", "включи", "закрой", "закрыть", "выключи",
+            "покажи", "сделай", "поставь", "увеличь", "уменьши", "найди"
+        ]
+        first_verb = None
+        for v in verbs:
+            if parts[0].startswith(v + " "):
+                first_verb = v
+                break
+
+        final_commands = []
+        for i, part in enumerate(parts):
+            if i > 0 and first_verb:
+                # Если часть не начинается ни с одного глагола действия, наследуем
+                if not any(part.startswith(v + " ") for v in verbs):
+                    part = f"{first_verb} {part}"
+            final_commands.append(part)
+
+        return final_commands
+
+    def _handle_single(self, text: str) -> str:
+        """Обработка одной атомарной команды."""
         text_with_digits = ru_numbers_to_digits(text)
         cmd = Command(text_with_digits)
         clean_text = self._clean(cmd.text_lower)
@@ -261,13 +373,14 @@ class CommandHandler:
             if base_a in self.app_launcher.memory.get("apps", {}):
                 return self.app_launcher.launch(clean_text, self.profile.honorific)
 
-        # 6. Если в фразе есть имя приложения из памяти («такой телеграмм», «открой мне стим», «запусти-ка проводник»)
+        # 6. Если в фразе есть имя приложения из памяти
         words = clean_text.split()
         if not any(stop in clean_text for stop in ("закрой", "закрыть", "выключи", "удали", "стоп")):
             for w in sorted(self.app_launcher.memory.get("apps", {}).keys(), key=len, reverse=True):
                 if len(w) >= 3 and (w in words or f" {w} " in f" {clean_text} "):
                     return self.app_launcher.launch(w, self.profile.honorific)
 
+        # 7. Классификатор намерений (NLU)
         result = self.intent_service.classify(cmd.text)
         print(f"[NLU] intent={result.intent}  target={result.target_en}  "
               f"query={result.params.get('query') or result.target_ru}  "
@@ -276,7 +389,6 @@ class CommandHandler:
         blocked_dangerous = False
 
         if result.intent != "chat" and result.confidence >= ACT_MIN_CONFIDENCE:
-            # выключение и перезагрузку по догадке модели не выполняем
             if (self.fallback.is_dangerous(result)
                     and (result.target_en or "") != "sleep"):
                 blocked_dangerous = True
@@ -288,7 +400,7 @@ class CommandHandler:
         elif result.intent == "chat" and result.confidence >= CHAT_MIN_CONFIDENCE:
             return self._chat(cmd, result)
 
-        # Классификатор не уверен: пробуем прежний разбор по ключевым словам
+        # Запасной путь по ключевым словам
         reply = self._handle_by_keywords(cmd)
         if reply is not None:
             return reply
@@ -316,7 +428,6 @@ class CommandHandler:
                 return handler(Command(canonical), self.ctx)
 
             if result.intent == "system":
-                # Vosk выдаёт числа словами: «громкость пятьдесят» -> «громкость 50»
                 cmd = Command(ru_numbers_to_digits(cmd.text))
 
             return self.router.route(cmd, result)
@@ -332,7 +443,6 @@ class CommandHandler:
             if reply:
                 return reply
 
-        # Если Ollama не запущена, открываем поиск ТОЛЬКО по прямому поисковому запросу!
         search_words = ("загугли", "прогугли", "погугли", "поищи", "найди в интернете", "найди в сети", "поиск в гугле", "что такое", "кто такой")
         if any(w in cmd.text_lower for w in search_words):
             clean = self._clean(cmd.text_lower)
@@ -348,7 +458,6 @@ class CommandHandler:
                 webbrowser.open(url)
             return self.ctx.reply(f"Ищу информацию по запросу «{clean}» в браузере")
 
-        # При шуме или нераспознанной речи:
         return self.ctx.reply("Не совсем понял команду. Повторите, пожалуйста")
 
     # --------------------------------------------- запасной разбор по ключевым словам
@@ -366,7 +475,7 @@ class CommandHandler:
         if func:
             return func(cmd, self.ctx)
 
-        # 3. Нечёткое совпадение (опечатки распознавания), только короткие фразы
+        # 3. Нечёткое совпадение
         if word_count <= FUZZY_MAX_WORDS:
             func = self._match_fuzzy(match_text)
             if func:
@@ -381,7 +490,6 @@ class CommandHandler:
 
     def _match_static(self, match_text: str):
         for keyword, func in self._sorted_map:
-            # границы слов: "спи" не должно срабатывать на "расписание"
             if re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", match_text):
                 return func
         return None

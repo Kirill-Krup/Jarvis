@@ -44,3 +44,30 @@
 {"text": "открой им терри чья идея", "guess": "open_app", "conf": 0.58}
 {"text": "открой джава", "guess": "open_app", "conf": 0.495}
 {"text": "", "guess": "chat", "conf": 0.293}
+{"text": "яркость привет", "guess": "system:brightness_set", "conf": 0.394}
+{"text": "гага гага гага", "guess": "chat", "conf": 0.312}
+{"text": "воспроизведи музыку", "guess": "web:music", "conf": 0.376}
+{"text": "троньте гравити", "guess": "chat", "conf": 0.297}
+{"text": "счетов на свете не мы восхождение в тени", "guess": "chat", "conf": 0.289}
+{"text": "в тени", "guess": "chat", "conf": 0.219}
+{"text": "арбузы полезные", "guess": "chat", "conf": 0.188}
+{"text": "какие арбузы полезные", "guess": "todo:list", "conf": 0.269}
+{"text": "открой с пути фай", "guess": "open_app", "conf": 0.386}
+{"text": "воскликнул", "guess": "chat", "conf": 0.209}
+{"text": "жар бик", "guess": "chat", "conf": 0.235}
+{"text": "тогда боли", "guess": "chat", "conf": 0.42}
+{"text": "доктор восток", "guess": "chat", "conf": 0.352}
+{"text": "сток", "guess": "chat", "conf": 0.376}
+{"text": "по", "guess": "chat", "conf": 0.232}
+{"text": "город", "guess": "chat", "conf": 0.382}
+{"text": "спеть через задач", "guess": "todo:remind", "conf": 0.319}
+{"text": "теперь чарльз задач", "guess": "system:task_manager", "conf": 0.408}
+{"text": "через задач", "guess": "todo:remind", "conf": 0.47}
+{"text": "открой вивальди", "guess": "open_app", "conf": 0.421}
+{"text": "", "guess": "chat", "conf": 0.265}
+{"text": "открой они мы белок", "guess": "open_app", "conf": 0.507}
+{"text": "открой они мы синяя тюрьма", "guess": "open_app", "conf": 0.608}
+{"text": "открой аниме синяя тюрьма", "guess": "open_app", "conf": 0.447}
+{"text": "порог", "guess": "chat", "conf": 0.193}
+{"text": "же", "guess": "chat", "conf": 0.269}
+{"text": "учёного робота", "guess": "chat", "conf": 0.372}

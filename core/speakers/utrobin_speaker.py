@@ -129,12 +129,23 @@ class UtrobinSpeaker(BaseSpeaker):
             return
         text = verbalize_numbers(str(text))
         print(f"Джарвис: {text}")
-        try:
-            audio_thread = threading.Thread(target=self._generate_and_play, args=(text,))
-            audio_thread.start()
-            audio_thread.join()
-        except Exception as e:
-            print(f"Ошибка UtrobinSpeaker: {e}")
+
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                audio_thread = threading.Thread(target=self._generate_and_play, args=(text,))
+                audio_thread.start()
+                audio_thread.join(timeout=15)
+                if audio_thread.is_alive():
+                    print(f"[TTS] Таймаут генерации речи (попытка {attempt + 1})")
+                    continue
+                return  # Успех — выходим
+            except Exception as e:
+                print(f"Ошибка UtrobinSpeaker (попытка {attempt + 1}): {e}")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(0.3)
+        print(f"[TTS] Не удалось озвучить после {max_retries + 1} попыток: {text[:50]}")
 
     def _generate_and_play(self, text: str):
         try:
@@ -142,7 +153,10 @@ class UtrobinSpeaker(BaseSpeaker):
             if text_lower in self._accent_cache:
                 text_with_accents = self._accent_cache[text_lower]
             else:
-                text_with_accents = self.accentizer.process_all(text_lower)
+                try:
+                    text_with_accents = self.accentizer.process_all(text_lower)
+                except Exception:
+                    text_with_accents = text_lower
                 self._accent_cache[text_lower] = text_with_accents
 
             inputs = self.tokenizer(text_with_accents, return_tensors="np")
@@ -158,6 +172,10 @@ class UtrobinSpeaker(BaseSpeaker):
             )[0]
 
             audio_array = output[0]
+            if audio_array is None or len(audio_array) == 0:
+                print("[TTS] Пустой аудио-буфер, пропускаю воспроизведение")
+                return
+
             audio_array = np.clip(audio_array, -1, 1)
             audio_int16 = (audio_array * 32767).astype(np.int16)
 

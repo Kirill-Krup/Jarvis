@@ -10,6 +10,7 @@ import sys
 import json
 import re
 import queue
+import time
 import numpy as np
 import sounddevice as sd
 import torch
@@ -130,7 +131,8 @@ class Listener:
 
     def _vad_listen(self, recognizer: KaldiRecognizer,
                     silence_ms: int = 350,
-                    threshold: float = 0.5) -> str:
+                    threshold: float = 0.5,
+                    timeout_sec: float | None = None) -> str:
 
         silence_needed = int(silence_ms / ((self.BLOCK_SIZE / self.SAMPLE_RATE) * 1000))
         silence_frames = 0
@@ -140,11 +142,19 @@ class Listener:
         recognizer.Reset()
         self._drain_queue()
 
+        # Таймаут на ожидание начала речи
+        max_wait_frames = None
+        if timeout_sec is not None and timeout_sec > 0:
+            max_wait_frames = int(timeout_sec * (self.SAMPLE_RATE / self.BLOCK_SIZE))
+        wait_frames = 0
+
         while True:
             try:
-                data = self.q.get(timeout=10.0)
+                data = self.q.get(timeout=2.0)
             except queue.Empty:
-                break
+                if not speaking:
+                    break
+                continue
 
             chunk = torch.from_numpy(
                 np.frombuffer(data, dtype=np.int16).copy()
@@ -168,6 +178,12 @@ class Listener:
                 recognizer.AcceptWaveform(data)
                 if silence_frames >= silence_needed:
                     break
+            else:
+                # Если речь еще не началась, проверяем лимит времени
+                if max_wait_frames is not None:
+                    wait_frames += 1
+                    if wait_frames >= max_wait_frames:
+                        break
 
         if not has_audio:
             return ""
@@ -224,12 +240,22 @@ class Listener:
             return res[0]
         return None
 
-    def listen(self) -> str | None:
-        print("\n[MIC] Слушаю команду...")
+    def listen(self, timeout_sec: float | None = None) -> str | None:
+        """Слушает речь с микрофона.
+        
+        Если задан timeout_sec и пользователь не начал говорить за это время,
+        немедленно возвращает None.
+        """
+        if timeout_sec:
+            print(f"\n[MIC] Слушаю команду (таймаут {timeout_sec:.1f}с)...")
+        else:
+            print("\n[MIC] Слушаю команду...")
+
         text = self._vad_listen(
             recognizer=self.recognizer,
             silence_ms=240,
-            threshold=0.5
+            threshold=0.5,
+            timeout_sec=timeout_sec
         )
         if text:
             print(f"\n[ФИНАЛ] Джарвис услышал: '{text}'")

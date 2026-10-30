@@ -457,6 +457,22 @@ class MainWindow:
                  relief="flat", width=26).grid(row=1, column=1, pady=8, padx=8)
 
         cfg = load_config()
+
+        tk.Label(form, text="Музыка:",
+                 font=("Courier New", 9),
+                 fg="#c3d4ff", bg="#070d17").grid(row=2, column=0, sticky="w", pady=8, padx=8)
+        self._music_player_var = tk.StringVar(value=cfg.get("music_player", "YouTube Music"))
+        music_options = [
+            "YouTube Music", "Spotify", "Яндекс Музыка", "VK Музыка",
+            "SoundCloud", "Apple Music", "Deezer"
+        ]
+        music_cb = ttk.Combobox(
+            form, textvariable=self._music_player_var,
+            values=music_options, state="readonly", width=24,
+            font=("Courier New", 8)
+        )
+        music_cb.grid(row=2, column=1, pady=8, padx=8)
+
         self._autostart_var = tk.BooleanVar(
             value=bool(cfg.get("autostart", False)) or is_autostart_enabled()
         )
@@ -479,6 +495,7 @@ class MainWindow:
             cfg_local = load_config()
             cfg_local["name"] = self._name_var.get().strip()
             cfg_local["honorific"] = self._honorific_var.get().strip()
+            cfg_local["music_player"] = self._music_player_var.get().strip()
             cfg_local["autostart"] = bool(self._autostart_var.get())
             save_config(cfg_local)
             if cfg_local["autostart"]:

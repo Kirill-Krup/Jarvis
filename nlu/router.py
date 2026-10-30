@@ -1,8 +1,8 @@
 import os
 import webbrowser
 
-from commands import intents_media
-from commands.system import intents_system, intents_volume, intents_utils, intents_display
+from commands import intents_media, intents_apps
+from commands.system import intents_system, intents_volume, intents_utils, intents_display, intents_connectivity
 
 
 class IntentRouter:
@@ -16,8 +16,12 @@ class IntentRouter:
             return self._open_website(cmd, result)
         if intent == "open_app":
             return self._open_app(cmd, result)
+        if intent == "close_app":
+            return self._close_app(cmd, result)
         if intent == "open_folder":
             return self._open_folder(cmd, result)
+        if intent == "close_folder":
+            return self._close_folder(cmd, result)
         if intent == "media":
             return self._media(cmd, result)
         if intent == "system":
@@ -60,6 +64,13 @@ class IntentRouter:
         target_display = result.target_ru or result.target_en or "приложение"
         return self.ctx.reply(f"Не удалось найти {target_display}")
 
+    def _close_app(self, cmd, result):
+        honorific = self.ctx.profile.honorific
+        app_name = result.target_ru or result.target_en or cmd.text
+        for prefix in ("закрой", "закрыть", "выключи", "выруби"):
+            app_name = app_name.replace(prefix, "").strip()
+        return intents_apps.handle_close(cmd, self.ctx)
+
     def _open_folder(self, cmd, result):
         folder_candidates = []
 
@@ -78,6 +89,9 @@ class IntentRouter:
 
         folder_name = result.target_ru or result.target_en or "папка"
         return self.ctx.reply(f"Папка {folder_name} не найдена")
+
+    def _close_folder(self, cmd, result):
+        return intents_apps.handle_close_folder(cmd, self.ctx)
 
     def _media(self, cmd, result):
         media_map = {
@@ -113,8 +127,6 @@ class IntentRouter:
             "brightness_monitor_3": intents_display.handle_brightness_monitor,
             "screenshot": intents_utils.handle_screenshot,
             "lock": intents_system.handle_lock_pc,
-            # "restart": intents_system.handle_restart_pc,
-            # "shutdown": intents_system.handle_shutdown,
             "sleep": intents_system.handle_sleep,
             "task_manager": intents_system.handle_task_manager,
             "explorer": intents_system.handle_explorer,
@@ -126,6 +138,12 @@ class IntentRouter:
             "display_primary": intents_display.handle_display_primary,
             "display_second": intents_display.handle_display_second,
             "display_info": intents_display.handle_display_info,
+            "bluetooth_on": intents_connectivity.handle_bluetooth_on,
+            "bluetooth_off": intents_connectivity.handle_bluetooth_off,
+            "wifi_on": intents_connectivity.handle_wifi_on,
+            "wifi_off": intents_connectivity.handle_wifi_off,
+            "hotspot": intents_connectivity.handle_hotspot_on,
+            "airplane": intents_connectivity.handle_airplane_on,
         }
 
         fn = system_map.get(result.target_en or "")

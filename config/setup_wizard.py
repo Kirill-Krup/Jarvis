@@ -6,6 +6,16 @@ from tkinter import ttk, messagebox
 
 CONFIG_PATH = "config/user_config.json"
 
+MUSIC_PLAYERS = {
+    "YouTube Music": "https://music.youtube.com",
+    "Spotify": "https://open.spotify.com",
+    "Яндекс Музыка": "https://music.yandex.ru",
+    "VK Музыка": "https://vk.com/audio",
+    "SoundCloud": "https://soundcloud.com",
+    "Apple Music": "https://music.apple.com",
+    "Deezer": "https://www.deezer.com",
+}
+
 
 def is_first_run() -> bool:
     return not os.path.exists(CONFIG_PATH)
@@ -26,12 +36,13 @@ class SetupWizard:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Джарвис — первая настройка")
-        self.root.geometry("450x480")
+        self.root.geometry("450x560")
         self.root.resizable(False, False)
 
         self.name_var = tk.StringVar()
         self.honorific_var = tk.StringVar(value="sir")
         self.drives_var = tk.StringVar()
+        self.music_player_var = tk.StringVar(value="YouTube Music")
 
         self._build_ui()
 
@@ -94,11 +105,29 @@ class SetupWizard:
 
         self.honorific_var.trace("w", self._on_honorific_change)
 
+        # Музыкальный плеер
+        tk.Label(
+            self.root,
+            text="Предпочитаемый музыкальный сервис:",
+            font=("Arial", 10),
+        ).pack(anchor="w", padx=30, pady=(10, 5))
+
+        music_combo = ttk.Combobox(
+            self.root,
+            textvariable=self.music_player_var,
+            values=list(MUSIC_PLAYERS.keys()),
+            state="readonly",
+            font=("Arial", 10),
+            width=27,
+        )
+        music_combo.pack(padx=30, pady=(0, 10))
+
+        # Диски
         tk.Label(
             self.root,
             text="Дополнительные диски (через запятую, без :) ?",
             font=("Arial", 10),
-        ).pack(anchor="w", padx=30, pady=(15, 5))
+        ).pack(anchor="w", padx=30, pady=(10, 5))
         tk.Label(
             self.root,
             text="Пример: D, E, F",
@@ -174,6 +203,8 @@ class SetupWizard:
         drives_input = self.drives_var.get()
         extra_drives = self._parse_drives(drives_input)
 
+        music_player = self.music_player_var.get()
+
         config = {
             "name": name,
             "honorific": honorific,
@@ -181,6 +212,7 @@ class SetupWizard:
             "speed": "-5%",
             "pitch": pitch,
             "extra_drives": extra_drives,
+            "music_player": music_player,
         }
 
         save_config(config)

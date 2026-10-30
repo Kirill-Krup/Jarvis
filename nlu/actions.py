@@ -33,6 +33,7 @@ ACTIONS = {
     "web:music": ("commands.web.intents_web", "handle_music", "включи музыку", None),
     "web:youtube_search": ("commands.web.intents_youtube", "handle_youtube_search", "найди на ютубе {q}", "Что искать на ютубе?"),
     "web:channel": ("commands.web.intents_youtube", "handle_open_channel", "открой канал {q}", "Какой канал открыть?"),
+    "web:weather": ("commands.web.intents_web", "handle_weather", "какая погода {q}", None),
 
     # управление ютубом
     "youtube:fullscreen": ("commands.web.intents_youtube", "handle_youtube_fullscreen", "полный экран", None),
@@ -47,6 +48,21 @@ ACTIONS = {
     # утилиты
     "util:time": ("commands.system.intents_utils", "handle_time", "который час", None),
     "util:date": ("commands.system.intents_utils", "handle_date", "какая дата", None),
+
+    # подключения (Bluetooth, WiFi)
+    "system:bluetooth_on": ("commands.system.intents_connectivity", "handle_bluetooth_on", "включи блютуз", None),
+    "system:bluetooth_off": ("commands.system.intents_connectivity", "handle_bluetooth_off", "выключи блютуз", None),
+    "system:wifi_on": ("commands.system.intents_connectivity", "handle_wifi_on", "включи вай фай", None),
+    "system:wifi_off": ("commands.system.intents_connectivity", "handle_wifi_off", "выключи вай фай", None),
+    "system:hotspot": ("commands.system.intents_connectivity", "handle_hotspot_on", "включи точку доступа", None),
+    "system:airplane": ("commands.system.intents_connectivity", "handle_airplane_on", "режим в самолёте", None),
+
+    # To-Do список
+    "todo:add": ("commands.todo_handler", "handle_todo_add", "добавь в список дел {q}", "Что добавить в список дел?"),
+    "todo:list": ("commands.todo_handler", "handle_todo_list", "список дел", None),
+    "todo:done": ("commands.todo_handler", "handle_todo_done", "выполнено {q}", "Какое дело выполнено?"),
+    "todo:clear": ("commands.todo_handler", "handle_todo_clear", "очисти список дел", None),
+    "todo:remind": ("commands.todo_handler", "handle_todo_remind", "напомни {q}", "О чём напомнить?"),
 }
 
 ACTION_LABELS = frozenset(ACTIONS)
