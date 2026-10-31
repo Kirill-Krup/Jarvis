@@ -19,3 +19,4 @@ comtypes
 requests
 onnxruntime
 num2words
+duckduckgo_search

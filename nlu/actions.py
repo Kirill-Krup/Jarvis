@@ -30,7 +30,6 @@ ACTIONS = {
     "web:info": ("commands.web.intents_web", "handle_info_search", "найди информацию {q}", "Какую информацию искать?"),
     "web:video": ("commands.web.intents_web", "handle_video_search", "найди видео {q}", "Какое видео найти?"),
     "web:movie": ("commands.web.intents_web", "handle_movie_search", "хочу посмотреть {q}", "Какой фильм или сериал?"),
-    "web:music": ("commands.web.intents_web", "handle_music", "включи музыку", None),
     "web:youtube_search": ("commands.web.intents_youtube", "handle_youtube_search", "найди на ютубе {q}", "Что искать на ютубе?"),
     "web:channel": ("commands.web.intents_youtube", "handle_open_channel", "открой канал {q}", "Какой канал открыть?"),
     "web:weather": ("commands.web.intents_web", "handle_weather", "какая погода {q}", None),
@@ -63,6 +62,10 @@ ACTIONS = {
     "todo:done": ("commands.todo_handler", "handle_todo_done", "выполнено {q}", "Какое дело выполнено?"),
     "todo:clear": ("commands.todo_handler", "handle_todo_clear", "очисти список дел", None),
     "todo:remind": ("commands.todo_handler", "handle_todo_remind", "напомни {q}", "О чём напомнить?"),
+
+    # Музыка
+    "music:play_song": ("commands.web.intents_web", "handle_play_song", "включи песню {q}", "Какую песню включить?"),
+    "web:music": ("commands.web.intents_web", "handle_music", "включи музыку", None),
 }
 
 ACTION_LABELS = frozenset(ACTIONS)

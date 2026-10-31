@@ -4,6 +4,7 @@ import os
 import re
 import urllib.parse
 import requests
+from ddgs import DDGS
 
 
 def open_browser_url(url: str):
@@ -42,6 +43,86 @@ ANIME_KEYWORDS = [
 ]
 
 
+def _get_first_link(query: str, site: str = "") -> str:
+    """Ищет запрос в DuckDuckGo (ddgs) и возвращает первую ссылку."""
+    search_query = f"site:{site} {query}" if site else query
+    try:
+        results = list(DDGS().text(search_query, max_results=1))
+        if results:
+            return results[0]['href']
+    except Exception as e:
+        print(f"[DDGS] Ошибка поиска: {e}")
+    return None
+
+
+def _clean_query(text: str) -> str:
+    """Тщательно очищает запрос, удаляя слова-паразиты и мусорные символы."""
+    text = text.lower()
+
+    # Список слов, которые нужно удалить (целиком слова)
+    stop_words = [
+        "хочу посмотреть", "хочу глянуть", "давай посмотрим", "давай глянем",
+        "посмотреть", "глянуть", "найди", "включи", "поищи", "покажи",
+        "фильм", "сериал", "аниме", "анимэ", "аниму", "anime", "кино",
+        "пожалуйста", "мне", "хочу", "они", "мое", "моё", "этот", "это"
+    ]
+
+    # Заменяем слова на пробел (используя границы слов \b)
+    for w in stop_words:
+        text = re.sub(rf'\b{w}\b', ' ', text)
+
+    # Удаляем все знаки препинания и кавычки
+    text = re.sub(r'[^\w\s]', '', text)
+
+    # Убираем лишние пробелы
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_anime_query(text: str) -> bool:
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in ANIME_KEYWORDS)
+
+
+def handle_anime_search(raw_query: str, ctx):
+    clean = _clean_query(raw_query)
+
+    if not clean:
+        open_browser_url("https://ru.yummyani.me")
+        return ctx.reply("Открываю каталог аниме на YummyAnime")
+
+    url = _get_first_link(clean, "ru.yummyani.me")
+
+    if url:
+        open_browser_url(url)
+        return ctx.reply(f"Открываю аниме «{clean}» на YummyAnime")
+    else:
+        fallback_url = f"https://yandex.ru/search/?text={urllib.parse.quote_plus(f'site:ru.yummyani.me {clean}')}"
+        open_browser_url(fallback_url)
+        return ctx.reply(f"Не удалось найти точную ссылку, открываю поиск по «{clean}»")
+
+
+def handle_movie_search(cmd, ctx):
+    text = cmd.text_lower
+
+    if _is_anime_query(text):
+        return handle_anime_search(text, ctx)
+
+    cleaned = _clean_query(text)
+
+    if not cleaned:
+        return ctx.reply("Какой фильм искать?")
+
+    url = _get_first_link(cleaned, "kinogo-film.fm")
+
+    if url:
+        open_browser_url(url)
+        return ctx.reply(f"Открываю фильм «{cleaned}» на KinoGo")
+    else:
+        fallback_url = f"https://yandex.ru/search/?text={urllib.parse.quote_plus(f'site:kinogo-film.fm {cleaned}')}"
+        open_browser_url(fallback_url)
+        return ctx.reply(f"Открываю поиск фильма «{cleaned}»")
+
+
 def _get_music_url() -> tuple[str, str]:
     """Возвращает (url, имя сервиса) из конфига пользователя."""
     try:
@@ -59,12 +140,7 @@ def _get_music_url() -> tuple[str, str]:
 
 
 def handle_currency(cmd, ctx):
-    """
-    'курс доллара', 'какой курс доллара', 'сколько стоит доллар', 'курс евро', 'курс валют'
-    """
     text = cmd.text_lower
-
-    # Открываем актуальную страницу с котировками в браузере
     open_browser_url("https://www.google.com/search?q=курс+доллара")
 
     usd_rub, eur_rub, usd_byn = None, None, None
@@ -95,15 +171,12 @@ def handle_currency(cmd, ctx):
 
 
 def handle_web(cmd, ctx):
-    """
-    'открой сайт ...', 'найди сайт ...', 'зайди на ...'
-    """
     text = cmd.text_lower
     query = (
         text.replace("открой сайт", "")
-            .replace("найди сайт", "")
-            .replace("зайди на", "")
-            .strip()
+        .replace("найди сайт", "")
+        .replace("зайди на", "")
+        .strip()
     )
 
     if not query:
@@ -113,26 +186,22 @@ def handle_web(cmd, ctx):
 
 
 def handle_search(cmd, ctx):
-    """
-    'загугли ...', 'прогугли ...', 'погугли ...', 'найди ...', 'поиск ...'
-    """
     text = cmd.text_lower
     query = text
 
     for prefix in (
-        "найди в интернете", "найди в гугле", "найди информацию про",
-        "найди информацию о", "найди информацию", "прогугли мне", "загугли мне",
-        "погугли мне", "прогугли", "загугли", "погугли", "поищи", "найди", "поиск"
+            "найди в интернете", "найди в гугле", "найди информацию про",
+            "найди информацию о", "найди информацию", "прогугли мне", "загугли мне",
+            "погугли мне", "прогугли", "загугли", "погугли", "поищи", "найди", "поиск"
     ):
         if query.startswith(prefix):
             query = query[len(prefix):].strip()
             break
 
-    # Если запрос про курс валют
-    if any(w in query for w in ("курс доллара", "курс валют", "курс евро", "сколько стоит доллар", "почем доллар", "доллар")):
+    if any(w in query for w in
+           ("курс доллара", "курс валют", "курс евро", "сколько стоит доллар", "почем доллар", "доллар")):
         return handle_currency(cmd, ctx)
 
-    # Если запрос про аниме ("найди аниме ...")
     if _is_anime_query(query):
         return handle_anime_search(query, ctx)
 
@@ -145,16 +214,13 @@ def handle_search(cmd, ctx):
 
 
 def handle_info_search(cmd, ctx):
-    """
-    'найди информацию по запросу ...', 'найди информацию ...', 'хочу узнать ...'
-    """
     text = cmd.text_lower
     query = (
         text.replace("найди информацию по запросу", "")
-            .replace("найди информацию по", "")
-            .replace("найди информацию", "")
-            .replace("хочу узнать", "")
-            .strip()
+        .replace("найди информацию по", "")
+        .replace("найди информацию", "")
+        .replace("хочу узнать", "")
+        .strip()
     )
 
     if not query:
@@ -179,83 +245,18 @@ def handle_video_search(cmd, ctx):
 
 
 def handle_music(cmd, ctx):
-    """Открывает музыкальный сервис, выбранный пользователем при настройке."""
     url, player_name = _get_music_url()
     open_browser_url(url)
     return ctx.reply(f"Открываю {player_name}")
 
 
-def _is_anime_query(text: str) -> bool:
-    """Определяет, относится ли запрос к просмотру аниме."""
-    text_lower = text.lower()
-    return any(kw in text_lower for kw in ANIME_KEYWORDS)
-
-
-def handle_anime_search(raw_query: str, ctx):
-    """Специализированный поиск и открытие аниме на AnimeGO / Jut.su."""
-    clean = raw_query.lower()
-    # Удаляем служебные слова и кавычки
-    for w in (
-        "хочу посмотреть", "давай посмотрим", "посмотреть", "глянуть",
-        "найди", "включи", "аниме", "анимэ", "аниму", "anime", "сериал", "мультик",
-        '"', "'", "«", "»", "“", "”"
-    ):
-        clean = clean.replace(w, " ")
-    clean = re.sub(r"\s+", " ", clean).strip()
-
-    if not clean:
-        open_browser_url("https://animego.org/anime")
-        return ctx.reply("Открываю каталог аниме на АнимеГо")
-
-    encoded = urllib.parse.quote_plus(clean)
-    url = f"https://animego.org/search/anime?q={encoded}"
-    open_browser_url(url)
-    return ctx.reply(f"Ищу аниме «{clean}» на АнимеГо")
-
-
-def handle_movie_search(cmd, ctx):
-    """Поиск фильмов/сериалов/аниме."""
-    text = cmd.text_lower
-
-    # Если это аниме — сразу отправляем на специализированный аниме-сайт (AnimeGO)
-    if _is_anime_query(text):
-        return handle_anime_search(text, ctx)
-
-    # Обычный фильм или сериал
-    cleaned = text
-    for prefix in (
-        "хочу посмотреть фильм", "хочу посмотреть сериал", "хочу посмотреть",
-        "давай посмотрим фильм", "давай посмотрим сериал", "давай посмотрим",
-        "посмотреть фильм", "посмотреть сериал", "посмотреть",
-        "хочу глянуть фильм", "хочу глянуть", "давай глянем",
-        "найди фильм", "найди где посмотреть", "включи фильм",
-    ):
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix):].strip()
-            break
-
-    # Удаляем кавычки
-    cleaned = cleaned.replace('"', "").replace("'", "").replace("«", "").replace("»", "").strip()
-
-    if not cleaned:
-        return ctx.reply("Какой фильм или сериал вы хотите посмотреть?")
-
-    encoded = urllib.parse.quote_plus(cleaned)
-    url = f"https://www.kinopoisk.ru/index.php?kp_query={encoded}"
-    open_browser_url(url)
-    return ctx.reply(f"Ищу что посмотреть по запросу {cleaned}")
-
-
 def handle_weather(cmd, ctx):
-    """Обработчик погоды: 'какая погода', 'какая завтра погода' и т.д."""
     text = cmd.text_lower
-
-    # Извлекаем город или время
     query_parts = []
     for prefix in (
-        "какая погода", "погода", "какая будет погода",
-        "какая завтра погода", "какая сегодня погода",
-        "скажи погоду", "покажи погоду",
+            "какая погода", "погода", "какая будет погода",
+            "какая завтра погода", "какая сегодня погода",
+            "скажи погоду", "покажи погоду",
     ):
         if prefix in text:
             remainder = text.replace(prefix, "").strip()
@@ -263,7 +264,6 @@ def handle_weather(cmd, ctx):
                 query_parts.append(remainder)
             break
 
-    # Формируем поисковый запрос
     if "завтра" in text:
         search = "погода завтра"
     elif query_parts:
@@ -274,7 +274,6 @@ def handle_weather(cmd, ctx):
     url = f"https://www.google.com/search?q={urllib.parse.quote_plus(search)}"
     open_browser_url(url)
 
-    # Пробуем получить погоду через API wttr.in
     try:
         r = requests.get(
             "https://wttr.in/?format=%C+%t&lang=ru",
@@ -288,3 +287,32 @@ def handle_weather(cmd, ctx):
         pass
 
     return ctx.reply("Открываю прогноз погоды в браузере")
+
+
+def handle_play_song(cmd, ctx):
+    """Открывает поиск конкретной песни в выбранном сервисе."""
+    text = cmd.text_lower
+
+    # Убираем слова команды, оставляя только название песни
+    song_name = re.sub(r'\b(включи|поставь|вруби|хочу|послушать|песню|трек|музыку)\b', '', text)
+    song_name = re.sub(r'[^\w\s]', '', song_name).strip()  # Убираем кавычки и знаки препинания
+
+    if not song_name:
+        return ctx.reply("Какую песню включить?")
+
+    base_url, player_name = _get_music_url()
+    encoded_song = urllib.parse.quote_plus(song_name)
+
+    if "youtube.com" in base_url:
+        url = f"https://music.youtube.com/search?q={encoded_song}"
+    elif "spotify.com" in base_url:
+        url = f"https://open.spotify.com/search/{encoded_song}"
+    elif "yandex.ru" in base_url:
+        url = f"https://music.yandex.ru/search?text={encoded_song}"
+    elif "vk.com" in base_url:
+        url = f"https://vk.com/audio?q={encoded_song}"
+    else:
+        url = base_url
+
+    open_browser_url(url)
+    return ctx.reply(f"Ищу «{song_name}» в {player_name}")
