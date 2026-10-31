@@ -1,12 +1,28 @@
+import os
 import subprocess
+import ctypes
+import time
+
+
 def open_browser_url(url: str):
     try:
         cmd = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", f"Start-Process '{url}'"]
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
     except Exception:
         import webbrowser
-        open_browser_url(url)
-import os
+        webbrowser.open(url)
+
+
+def _send_key_combo(vk_modifier: int, vk_key: int):
+    """Эмулирует нажатие комбинации клавиш (например, Ctrl+W или Alt+F4)."""
+    try:
+        ctypes.windll.user32.keybd_event(vk_modifier, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(vk_key, 0, 0, 0)
+        time.sleep(0.05)
+        ctypes.windll.user32.keybd_event(vk_key, 0, 2, 0)
+        ctypes.windll.user32.keybd_event(vk_modifier, 0, 2, 0)
+    except Exception as e:
+        print(f"[KEY] Ошибка посылки комбинации: {e}")
 
 
 def _extract_folder_name(text: str) -> str:
@@ -37,12 +53,10 @@ def handle_open(cmd, ctx):
         return ctx.reply("Что именно открыть?")
 
     if app_name in ["браузер", "интернет", "сеть"]:
-        import webbrowser
         open_browser_url("https://google.com")
         return ctx.reply("Открываю браузер")
 
     if app_name in KNOWN_SITES:
-        import webbrowser
         open_browser_url(KNOWN_SITES[app_name])
         return ctx.reply(f"Открываю {app_name}")
 
@@ -64,6 +78,9 @@ def handle_close(cmd, ctx):
         text.replace("закрой", "")
             .replace("закрыть", "")
             .replace("выключи приложение", "")
+            .replace("выруби", "")
+            .replace("заверши", "")
+            .replace("останови", "")
             .replace("пожалуйста", "")
             .strip()
     )
@@ -74,6 +91,26 @@ def handle_close(cmd, ctx):
     if "папк" in app_name:
         return handle_close_folder(cmd, ctx)
 
+    # 1. Закрытие вкладки браузера
+    if any(w in app_name for w in ("вкладку", "вкладка", "вкладки", "страницу", "страница")):
+        _send_key_combo(0x11, 0x57)  # Ctrl + W
+        return ctx.reply("Вкладка закрыта")
+
+    # 2. Закрытие окна
+    if any(w in app_name for w in ("окно", "окна", "активное окно")):
+        _send_key_combo(0x12, 0x73)  # Alt + F4
+        return ctx.reply("Окно закрыто")
+
+    # 3. Закрытие YouTube / музыки в браузере
+    if any(w in app_name for w in ("ютуб", "youtube", "музык", "трек", "песн", "плеер")):
+        try:
+            from commands import intents_media
+            intents_media.handle_media_pause(cmd, ctx)
+        except Exception:
+            pass
+        _send_key_combo(0x11, 0x57)  # Ctrl + W
+        return ctx.reply(f"Остановил и закрыл {app_name}")
+
     if app_name == "проводник":
         os.system(
             'powershell -Command "'
@@ -83,6 +120,7 @@ def handle_close(cmd, ctx):
         return ctx.reply("Закрываю проводник")
 
     return ctx.app_launcher.close(app_name, ctx.profile.honorific)
+
 
 def handle_folder(cmd, ctx):
     text = cmd.text_lower

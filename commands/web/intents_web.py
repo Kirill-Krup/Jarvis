@@ -6,6 +6,8 @@ import urllib.parse
 import requests
 from ddgs import DDGS
 
+from config.setup_wizard import MUSIC_PLAYERS, MOVIE_SOURCES, ANIME_SOURCES, load_config
+
 
 def open_browser_url(url: str):
     try:
@@ -14,17 +16,6 @@ def open_browser_url(url: str):
     except Exception:
         webbrowser.open(url)
 
-
-# Маппинг музыкальных сервисов
-MUSIC_PLAYER_URLS = {
-    "YouTube Music": "https://music.youtube.com",
-    "Spotify": "https://open.spotify.com",
-    "Яндекс Музыка": "https://music.yandex.ru",
-    "VK Музыка": "https://vk.com/audio",
-    "SoundCloud": "https://soundcloud.com",
-    "Apple Music": "https://music.apple.com",
-    "Deezer": "https://www.deezer.com",
-}
 
 # Ключевые слова для определения аниме
 ANIME_KEYWORDS = [
@@ -43,6 +34,13 @@ ANIME_KEYWORDS = [
 ]
 
 
+def _get_config() -> dict:
+    try:
+        return load_config()
+    except Exception:
+        return {}
+
+
 def _get_first_link(query: str, site: str = "") -> str:
     """Ищет запрос в DuckDuckGo (ddgs) и возвращает первую ссылку."""
     search_query = f"site:{site} {query}" if site else query
@@ -56,25 +54,17 @@ def _get_first_link(query: str, site: str = "") -> str:
 
 
 def _clean_query(text: str) -> str:
-    """Тщательно очищает запрос, удаляя слова-паразиты и мусорные символы."""
+    """Тщательно очищает запрос, удаляя слова-паразиты и знаки препинания."""
     text = text.lower()
-
-    # Список слов, которые нужно удалить (целиком слова)
     stop_words = [
         "хочу посмотреть", "хочу глянуть", "давай посмотрим", "давай глянем",
         "посмотреть", "глянуть", "найди", "включи", "поищи", "покажи",
         "фильм", "сериал", "аниме", "анимэ", "аниму", "anime", "кино",
         "пожалуйста", "мне", "хочу", "они", "мое", "моё", "этот", "это"
     ]
-
-    # Заменяем слова на пробел (используя границы слов \b)
     for w in stop_words:
         text = re.sub(rf'\b{w}\b', ' ', text)
-
-    # Удаляем все знаки препинания и кавычки
     text = re.sub(r'[^\w\s]', '', text)
-
-    # Убираем лишние пробелы
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -83,60 +73,101 @@ def _is_anime_query(text: str) -> bool:
     return any(kw in text_lower for kw in ANIME_KEYWORDS)
 
 
-def handle_anime_search(raw_query: str, ctx):
-    clean = _clean_query(raw_query)
+def handle_anime_search(raw_query, ctx):
+    """Поиск аниме согласно выбранному пользователем источнику."""
+    cfg = _get_config()
+    anime_src_key = cfg.get("anime_source", "AnimeGO")
+    src_info = ANIME_SOURCES.get(anime_src_key, ANIME_SOURCES["AnimeGO"])
+    src_name = src_info.get("name", "AnimeGO")
+
+    query_str = getattr(raw_query, "text_lower", str(raw_query))
+    clean = _clean_query(query_str)
 
     if not clean:
-        open_browser_url("https://ru.yummyani.me")
-        return ctx.reply("Открываю каталог аниме на YummyAnime")
+        catalog_url = src_info.get("catalog", "https://animego.org/anime")
+        open_browser_url(catalog_url)
+        return ctx.reply(f"Открываю каталог аниме на {src_name}")
 
-    url = _get_first_link(clean, "ru.yummyani.me")
-
-    if url:
+    # 1. Прямой URL поиска сайта (если поддерживается)
+    if "url" in src_info:
+        url = f"{src_info['url']}{urllib.parse.quote_plus(clean)}"
         open_browser_url(url)
-        return ctx.reply(f"Открываю аниме «{clean}» на YummyAnime")
-    else:
-        fallback_url = f"https://yandex.ru/search/?text={urllib.parse.quote_plus(f'site:ru.yummyani.me {clean}')}"
-        open_browser_url(fallback_url)
-        return ctx.reply(f"Не удалось найти точную ссылку, открываю поиск по «{clean}»")
+        return ctx.reply(f"Ищу аниме «{clean}» на {src_name}")
+
+    # 2. Поисковый запрос через domain / search
+    if "domain" in src_info:
+        domain = src_info["domain"]
+        first_link = _get_first_link(clean, domain)
+        if first_link:
+            open_browser_url(first_link)
+            return ctx.reply(f"Открываю аниме «{clean}» на {src_name}")
+        else:
+            fallback = f"https://yandex.ru/search/?text={urllib.parse.quote_plus(f'site:{domain} {clean}')}"
+            open_browser_url(fallback)
+            return ctx.reply(f"Ищу аниме «{clean}» на {src_name}")
+
+    if "search" in src_info:
+        template = src_info["search"]
+        url = template.format(q=urllib.parse.quote_plus(clean))
+        open_browser_url(url)
+        return ctx.reply(f"Ищу аниме «{clean}» в {src_name}")
+
+    # Fallback на AnimeGO
+    open_browser_url(f"https://animego.org/search/anime?q={urllib.parse.quote_plus(clean)}")
+    return ctx.reply(f"Ищу аниме «{clean}» на AnimeGO")
 
 
 def handle_movie_search(cmd, ctx):
-    text = cmd.text_lower
+    """Поиск фильмов согласно выбранному пользователем источнику."""
+    text = getattr(cmd, "text_lower", str(cmd).lower())
 
     if _is_anime_query(text):
         return handle_anime_search(text, ctx)
 
+    cfg = _get_config()
+    movie_src_key = cfg.get("movie_source", "KinoGo")
+    src_info = MOVIE_SOURCES.get(movie_src_key, MOVIE_SOURCES["KinoGo"])
+    src_name = src_info.get("name", "KinoGo")
+
     cleaned = _clean_query(text)
-
     if not cleaned:
-        return ctx.reply("Какой фильм искать?")
+        return ctx.reply("Какой фильм вы хотите посмотреть?")
 
-    url = _get_first_link(cleaned, "kinogo-film.fm")
-
-    if url:
+    # 1. Прямой URL сайта (например, КиноПоиск)
+    if "url" in src_info:
+        url = f"{src_info['url']}{urllib.parse.quote_plus(cleaned)}"
         open_browser_url(url)
-        return ctx.reply(f"Открываю фильм «{cleaned}» на KinoGo")
-    else:
-        fallback_url = f"https://yandex.ru/search/?text={urllib.parse.quote_plus(f'site:kinogo-film.fm {cleaned}')}"
-        open_browser_url(fallback_url)
-        return ctx.reply(f"Открываю поиск фильма «{cleaned}»")
+        return ctx.reply(f"Ищу фильм «{cleaned}» на {src_name}")
+
+    # 2. Доменный поиск через DuckDuckGo (KinoGo, HDRezka, Ivi, Okko)
+    if "domain" in src_info:
+        domain = src_info["domain"]
+        first_link = _get_first_link(cleaned, domain)
+        if first_link:
+            open_browser_url(first_link)
+            return ctx.reply(f"Открываю фильм «{cleaned}» на {src_name}")
+        else:
+            fallback = f"https://yandex.ru/search/?text={urllib.parse.quote_plus(f'site:{domain} {cleaned}')}"
+            open_browser_url(fallback)
+            return ctx.reply(f"Ищу фильм «{cleaned}» на {src_name}")
+
+    # 3. Шаблонный поиск (Яндекс онлайн)
+    if "search" in src_info:
+        url = src_info["search"].format(q=urllib.parse.quote_plus(cleaned))
+        open_browser_url(url)
+        return ctx.reply(f"Ищу фильм «{cleaned}» в {src_name}")
+
+    # Fallback
+    open_browser_url(f"https://yandex.ru/search/?text={urllib.parse.quote_plus(f'смотреть фильм {cleaned} онлайн')}")
+    return ctx.reply(f"Ищу фильм «{cleaned}» в браузере")
 
 
 def _get_music_url() -> tuple[str, str]:
     """Возвращает (url, имя сервиса) из конфига пользователя."""
-    try:
-        config_path = "config/user_config.json"
-        if os.path.exists(config_path):
-            import json
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-            player = config.get("music_player", "YouTube Music")
-            url = MUSIC_PLAYER_URLS.get(player, "https://music.youtube.com")
-            return url, player
-    except Exception:
-        pass
-    return "https://music.youtube.com", "YouTube Music"
+    cfg = _get_config()
+    player = cfg.get("music_player", "YouTube Music")
+    url = MUSIC_PLAYERS.get(player, "https://music.youtube.com")
+    return url, player
 
 
 def handle_currency(cmd, ctx):
@@ -245,57 +276,17 @@ def handle_video_search(cmd, ctx):
 
 
 def handle_music(cmd, ctx):
+    """Открывает музыкальный сервис, выбранный пользователем при настройке."""
     url, player_name = _get_music_url()
     open_browser_url(url)
     return ctx.reply(f"Открываю {player_name}")
 
 
-def handle_weather(cmd, ctx):
-    text = cmd.text_lower
-    query_parts = []
-    for prefix in (
-            "какая погода", "погода", "какая будет погода",
-            "какая завтра погода", "какая сегодня погода",
-            "скажи погоду", "покажи погоду",
-    ):
-        if prefix in text:
-            remainder = text.replace(prefix, "").strip()
-            if remainder:
-                query_parts.append(remainder)
-            break
-
-    if "завтра" in text:
-        search = "погода завтра"
-    elif query_parts:
-        search = f"погода {query_parts[0]}"
-    else:
-        search = "погода сегодня"
-
-    url = f"https://www.google.com/search?q={urllib.parse.quote_plus(search)}"
-    open_browser_url(url)
-
-    try:
-        r = requests.get(
-            "https://wttr.in/?format=%C+%t&lang=ru",
-            timeout=2,
-            headers={"User-Agent": "curl"},
-        )
-        if r.status_code == 200:
-            weather_text = r.text.strip()
-            return ctx.reply(f"Сейчас {weather_text}. Подробнее в браузере")
-    except Exception:
-        pass
-
-    return ctx.reply("Открываю прогноз погоды в браузере")
-
-
 def handle_play_song(cmd, ctx):
     """Открывает поиск конкретной песни в выбранном сервисе."""
-    text = cmd.text_lower
-
-    # Убираем слова команды, оставляя только название песни
-    song_name = re.sub(r'\b(включи|поставь|вруби|хочу|послушать|песню|трек|музыку)\b', '', text)
-    song_name = re.sub(r'[^\w\s]', '', song_name).strip()  # Убираем кавычки и знаки препинания
+    text = getattr(cmd, "text_lower", str(cmd).lower())
+    song_name = re.sub(r'\b(включи|поставь|вруби|хочу|послушать|песню|песня|трек|музыку|сыграй|композицию)\b', '', text)
+    song_name = re.sub(r'[^\w\s]', '', song_name).strip()
 
     if not song_name:
         return ctx.reply("Какую песню включить?")
@@ -303,7 +294,7 @@ def handle_play_song(cmd, ctx):
     base_url, player_name = _get_music_url()
     encoded_song = urllib.parse.quote_plus(song_name)
 
-    if "youtube.com" in base_url:
+    if "youtube.com" in base_url or "music.youtube.com" in base_url:
         url = f"https://music.youtube.com/search?q={encoded_song}"
     elif "spotify.com" in base_url:
         url = f"https://open.spotify.com/search/{encoded_song}"
@@ -312,7 +303,55 @@ def handle_play_song(cmd, ctx):
     elif "vk.com" in base_url:
         url = f"https://vk.com/audio?q={encoded_song}"
     else:
-        url = base_url
+        url = f"https://music.youtube.com/search?q={encoded_song}"
 
     open_browser_url(url)
-    return ctx.reply(f"Ищу «{song_name}» в {player_name}")
+    return ctx.reply(f"Включаю «{song_name}» в {player_name}")
+
+
+def handle_weather(cmd, ctx):
+    """Обработчик погоды с учетом выбранного в настройках города."""
+    text = getattr(cmd, "text_lower", str(cmd).lower())
+    cfg = _get_config()
+    default_city = cfg.get("city", "Москва")
+
+    # Ищем, упомянул ли пользователь конкретный город в фразе
+    target_city = None
+    city_match = re.search(r'\bв\s+([а-яё\-]+)', text)
+    if city_match:
+        cand = city_match.group(1).strip()
+        if cand not in ("сети", "интернете", "гугле", "браузере", "неделю", "выходные"):
+            target_city = cand.capitalize()
+
+    final_city = target_city or default_city
+    is_tomorrow = "завтра" in text
+
+    # Проверяем, просит ли пользователь открыть/показать в браузере
+    should_google = (
+        any(w in text for w in ("покажи", "открой", "гугли", "загугли", "браузер", "неделю", "выходные", "прогноз"))
+        or text.strip() in ("погода", "погоду")
+    )
+
+    if should_google:
+        search_query = f"погода в {final_city}" + (" завтра" if is_tomorrow else " сегодня")
+        url = f"https://www.google.com/search?q={urllib.parse.quote_plus(search_query)}"
+        open_browser_url(url)
+        day_label = "на завтра" if is_tomorrow else "на сегодня"
+        return ctx.reply(f"Открываю прогноз погоды для города {final_city} {day_label}")
+
+    # Иначе пользователь просто спросил голосом: "какая сейчас погода", "какая погода", "сколько градусов"
+    # Отвечаем ТОЛЬКО голосом БЕЗ открытия браузера!
+    try:
+        encoded_city = urllib.parse.quote(final_city)
+        endpoint = f"https://wttr.in/{encoded_city}?format=%C+%t&lang=ru"
+        r = requests.get(endpoint, timeout=2.5, headers={"User-Agent": "curl"})
+        if r.status_code == 200 and r.text.strip():
+            weather_text = r.text.strip()
+            day_label = "завтра" if is_tomorrow else "сейчас"
+            return ctx.reply(f"В городе {final_city} {day_label} {weather_text}")
+    except Exception:
+        pass
+
+    # Если API wttr.in временно недоступен
+    day_label = "завтра" if is_tomorrow else "сейчас"
+    return ctx.reply(f"Не удалось получить сводку погоды для города {final_city}. Скажите «покажи погоду», чтобы открыть её в браузере.")

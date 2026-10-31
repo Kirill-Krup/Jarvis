@@ -365,7 +365,16 @@ class CommandHandler:
             if any(w in clean_text for w in ("максимум", "минимум", "полную", "всю", "сто", "ноль")) or re.search(r'\d+', clean_text):
                 return intents_volume.handle_volume_set(cmd, self.ctx)
 
-        # 5. Мгновенное открытие приложения, если сказано только его название («телега», «телеграм», «стим», «дискорд»)
+        # 5. Обработка команд закрытия / выключения (чтобы исключить ложное открытие приложений)
+        close_verbs = ("закрой", "закрыть", "выключи", "выруби", "отруби", "заверши", "завершить", "останови", "убей", "убери", "погаси", "потуши")
+        if any(clean_text.startswith(v + " ") or clean_text == v for v in close_verbs):
+            if any(w in clean_text for w in ("музыку", "музыка", "песню", "песня", "трек", "плеер", "звуки", "воспроизведение")):
+                return intents_media.handle_media_pause(cmd, self.ctx)
+            if "звук" in clean_text:
+                return intents_volume.handle_mute(cmd, self.ctx)
+            return intents_apps.handle_close(cmd, self.ctx)
+
+        # 6. Мгновенное открытие приложения, если сказано только его название («телега», «телеграм», «стим», «дискорд»)
         if clean_text in self.app_launcher.memory.get("apps", {}):
             return self.app_launcher.launch(clean_text, self.profile.honorific)
         if clean_text.endswith("у") and len(clean_text) > 2:
@@ -373,9 +382,9 @@ class CommandHandler:
             if base_a in self.app_launcher.memory.get("apps", {}):
                 return self.app_launcher.launch(clean_text, self.profile.honorific)
 
-        # 6. Если в фразе есть имя приложения из памяти
+        # 7. Если в фразе есть имя приложения из памяти
         words = clean_text.split()
-        if not any(stop in clean_text for stop in ("закрой", "закрыть", "выключи", "удали", "стоп")):
+        if not any(stop in clean_text for stop in ("закрой", "закрыть", "выключи", "выруби", "заверши", "останови", "удали", "стоп")):
             for w in sorted(self.app_launcher.memory.get("apps", {}).keys(), key=len, reverse=True):
                 if len(w) >= 3 and (w in words or f" {w} " in f" {clean_text} "):
                     return self.app_launcher.launch(w, self.profile.honorific)
@@ -418,6 +427,10 @@ class CommandHandler:
             if result.intent == "action":
                 label = result.target_en
                 query = result.params.get("query", "")
+
+                # Защита: если классификатор определил web:music, но команда про выключение/закрытие музыки
+                if label == "web:music" and any(v in cmd.text_lower for v in ("закрой", "закрыть", "выключи", "выруби", "останови", "хватит", "стоп")):
+                    return intents_media.handle_media_pause(cmd, self.ctx)
 
                 question = actions.clarification(label, query)
                 if question:

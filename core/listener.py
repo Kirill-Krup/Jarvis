@@ -93,11 +93,18 @@ class Listener:
             )
         )
 
-        # 3. Постоянный поток аудио
+        # 3. Настройки чувствительности VAD и усиления из профиля
+        from config.profile_manager import ProfileManager
+        self.profile = ProfileManager()
+        self.vad_threshold = getattr(self.profile, "vad_threshold", 0.5)
+        self.silence_ms = getattr(self.profile, "silence_ms", 400)
+        self.mic_gain = getattr(self.profile, "mic_gain", 1.0)
+
+        # 4. Постоянный поток аудио
         self.stream = None
         self._start_stream()
 
-        print(f"[OK] Listener готов! ({self.SAMPLE_RATE}Hz)")
+        print(f"[OK] Listener готов! ({self.SAMPLE_RATE}Hz) VAD: thresh={self.vad_threshold}, pause={self.silence_ms}ms, gain={self.mic_gain}x")
         print(f"[MIC] Микрофон: {sd.query_devices(self.device)['name']}")
 
     def _start_stream(self):
@@ -129,12 +136,76 @@ class Listener:
             except queue.Empty:
                 break
 
+    def set_vad_params(self, threshold=None, silence_ms=None, mic_gain=None):
+        if threshold is not None:
+            self.vad_threshold = float(threshold)
+        if silence_ms is not None:
+            self.silence_ms = int(silence_ms)
+        if mic_gain is not None:
+            self.mic_gain = float(mic_gain)
+        print(f"[VAD CONFIG] thresh={self.vad_threshold}, pause={self.silence_ms}ms, gain={self.mic_gain}x")
+
+    def calibrate(self, duration_sec: float = 2.5) -> dict:
+        """Замеряет уровень фонового шума в помещении и калибрует VAD порог."""
+        print(f"[CALIBRATE] Замер шума {duration_sec}с...")
+        samples = []
+        self._drain_queue()
+        start_time = time.time()
+        while time.time() - start_time < duration_sec:
+            try:
+                data = self.q.get(timeout=0.2)
+                arr = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+                samples.append(arr)
+            except queue.Empty:
+                pass
+        if not samples:
+            return {"threshold": 0.5, "gain": 1.0, "status": "no_data"}
+
+        all_audio = np.concatenate(samples)
+        rms = float(np.sqrt(np.mean(all_audio ** 2)))
+        peak = float(np.max(np.abs(all_audio)))
+
+        # Автоматическая настройка порога VAD и усиления
+        if rms < 0.012:
+            rec_thresh = 0.45
+            rec_gain = 1.3 if peak < 0.2 else 1.0
+        elif rms < 0.04:
+            rec_thresh = 0.50
+            rec_gain = 1.0
+        else:
+            rec_thresh = 0.60
+            rec_gain = 0.9
+
+        self.vad_threshold = rec_thresh
+        self.mic_gain = rec_gain
+
+        try:
+            from config.setup_wizard import load_config, save_config
+            cfg = load_config()
+            cfg["vad_threshold"] = rec_thresh
+            cfg["mic_gain"] = rec_gain
+            save_config(cfg)
+            self.profile.reload()
+        except Exception:
+            pass
+
+        return {
+            "rms": round(rms, 4),
+            "peak": round(peak, 4),
+            "threshold": rec_thresh,
+            "gain": rec_gain,
+            "status": "ok"
+        }
+
     def _vad_listen(self, recognizer: KaldiRecognizer,
-                    silence_ms: int = 350,
-                    threshold: float = 0.5,
+                    silence_ms: int | None = None,
+                    threshold: float | None = None,
                     timeout_sec: float | None = None) -> str:
 
-        silence_needed = int(silence_ms / ((self.BLOCK_SIZE / self.SAMPLE_RATE) * 1000))
+        effective_silence = silence_ms if silence_ms is not None else self.silence_ms
+        effective_thresh = threshold if threshold is not None else self.vad_threshold
+
+        silence_needed = int(effective_silence / ((self.BLOCK_SIZE / self.SAMPLE_RATE) * 1000))
         silence_frames = 0
         speaking       = False
         has_audio      = False
@@ -156,9 +227,13 @@ class Listener:
                     break
                 continue
 
-            chunk = torch.from_numpy(
-                np.frombuffer(data, dtype=np.int16).copy()
-            ).float() / 32768.0
+            raw_np = np.frombuffer(data, dtype=np.int16).copy()
+            if self.mic_gain != 1.0:
+                boosted = np.clip(raw_np.astype(np.float32) * self.mic_gain, -32768, 32767).astype(np.int16)
+                data = boosted.tobytes()
+                chunk = torch.from_numpy(boosted).float() / 32768.0
+            else:
+                chunk = torch.from_numpy(raw_np).float() / 32768.0
 
             if chunk.shape[0] != self.BLOCK_SIZE:
                 continue
@@ -166,7 +241,7 @@ class Listener:
             with torch.no_grad():
                 speech_prob = self.vad_model(chunk, self.SAMPLE_RATE).item()
 
-            if speech_prob > threshold:
+            if speech_prob > effective_thresh:
                 if not speaking:
                     print("[VAD]  Говорите...", end="\r", flush=True)
                 speaking       = True
@@ -198,8 +273,8 @@ class Listener:
         """
         text = self._vad_listen(
             recognizer=self.recognizer,
-            silence_ms=240,
-            threshold=0.5
+            silence_ms=self.silence_ms,
+            threshold=self.vad_threshold
         )
 
         if not text:
@@ -253,8 +328,8 @@ class Listener:
 
         text = self._vad_listen(
             recognizer=self.recognizer,
-            silence_ms=240,
-            threshold=0.5,
+            silence_ms=self.silence_ms,
+            threshold=self.vad_threshold,
             timeout_sec=timeout_sec
         )
         if text:

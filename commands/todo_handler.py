@@ -111,40 +111,94 @@ def clear_all() -> str:
     return "Список дел полностью очищен"
 
 
+def get_all_todos() -> list[dict]:
+    """Возвращает сырой список всех задач."""
+    return _load_todos()
+
+
+def delete_todo_by_index(idx: int) -> bool:
+    """Удаляет задачу по её индексу в списке."""
+    todos = _load_todos()
+    if 0 <= idx < len(todos):
+        todos.pop(idx)
+        _save_todos(todos)
+        return True
+    return False
+
+
+def toggle_todo_by_index(idx: int) -> bool:
+    """Переключает статус выполнения задачи."""
+    todos = _load_todos()
+    if 0 <= idx < len(todos):
+        todos[idx]["done"] = not todos[idx].get("done", False)
+        _save_todos(todos)
+        return True
+    return False
+
+
 # ─── Напоминания ───
 
 _active_reminders: list[threading.Timer] = []
 
 
-def set_reminder(text: str, speaker) -> str:
+_WORD_NUMBERS = {
+    "один": 1, "одну": 1, "одна": 1,
+    "два": 2, "две": 2, "пару": 2, "парочку": 2,
+    "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9,
+    "десять": 10, "одиннадцать": 11, "двенадцать": 12, "пятнадцать": 15,
+    "двадцать": 20, "тридцать": 30, "сорок": 40, "сорок пять": 45, "пятьдесят": 50,
+}
+
+
+def set_reminder(text: str, speaker=None) -> str:
     """Парсит 'напомни через N минут/часов ...' и ставит таймер.
 
     Поддерживаемые форматы:
+      - напомни через минуту выпить таблетку
+      - напомни через пару минут проверить суп
+      - напомни через полчаса выключить духовку
       - напомни через 30 минут выпить таблетку
       - напомни через 1 час позвонить маме
-      - напомни через 5 минут проверить почту
     """
-    # Ищем паттерн «через N минут/часов/секунд»
-    pattern = re.compile(
-        r"через\s+(\d+)\s+(минут[аыу]?|мин|час(?:а|ов)?|секунд[аыу]?|сек)\s*(.*)",
-        re.IGNORECASE,
-    )
-    match = pattern.search(text)
+    clean_text = text.lower().strip()
 
-    if not match:
-        # Может просто «напомни выпить таблетку» — без времени, добавим как дело
-        task = text
-        for prefix in ("напомни мне", "напомни", "напоминание"):
-            if task.lower().startswith(prefix):
-                task = task[len(prefix):].strip()
-                break
-        if task:
-            return add_todo(task)
-        return "Не понял, о чём напомнить"
+    # Особый случай: «полчаса»
+    if "полчаса" in clean_text or "пол часа" in clean_text:
+        amount = 30
+        unit = "мин"
+        task = re.sub(r".*?(?:полчаса|пол\s+часа)\s*", "", clean_text, count=1).strip()
+    else:
+        # Проверяем «через (число или слово) (минут/часов/секунд) (дело)»
+        # Либо «через минуту/часик (дело)» без указания числа
+        pattern = re.compile(
+            r"через\s+(?:(\d+|[а-яё]+)\s+)?(минут[аыу]?|минутку|мин|час(?:а|ов|ик)?|секунд[аыу]?|секундочку|сек)\s*(.*)",
+            re.IGNORECASE,
+        )
+        match = pattern.search(clean_text)
 
-    amount = int(match.group(1))
-    unit = match.group(2).lower()
-    task = match.group(3).strip()
+        if not match:
+            # Если нет слова «через», но есть «напомни ...» без времени — сохраняем в To-Do
+            task = clean_text
+            for prefix in ("напомни мне", "напомни", "напоминание"):
+                if task.startswith(prefix):
+                    task = task[len(prefix):].strip()
+                    break
+            if task:
+                return add_todo(task)
+            return "Не понял, о чём и когда напомнить"
+
+        raw_num = match.group(1)
+        unit = match.group(2).lower()
+        task = match.group(3).strip()
+
+        if raw_num:
+            if raw_num.isdigit():
+                amount = int(raw_num)
+            else:
+                amount = _WORD_NUMBERS.get(raw_num.lower(), 1)
+        else:
+            # «через минуту», «через час», «через секунду» -> 1
+            amount = 1
 
     if not task:
         task = "Напоминание"
@@ -163,8 +217,26 @@ def set_reminder(text: str, speaker) -> str:
     def _fire_reminder():
         reminder_text = f"Напоминаю: {task}"
         print(f"[REMINDER] {reminder_text}")
-        if speaker:
-            speaker.speak(reminder_text)
+        try:
+            from core.logging_utils import log_action
+            log_action(f"Сработало напоминание: {task}")
+        except Exception:
+            pass
+
+        # Голосовое воспроизведение
+        spk = speaker
+        if not spk:
+            try:
+                from core.speakers.speaker import Speaker
+                spk = Speaker()
+            except Exception:
+                pass
+
+        if spk:
+            try:
+                spk.speak(reminder_text)
+            except Exception as e:
+                print(f"[REMINDER] Ошибка озвучки: {e}")
 
     timer = threading.Timer(seconds, _fire_reminder)
     timer.daemon = True
