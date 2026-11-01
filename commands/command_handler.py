@@ -1,26 +1,23 @@
-import sys
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
 import datetime
+import random
 import re
+import urllib.parse
 
 from thefuzz import fuzz
 
 from commands.app_launcher import AppLauncher
 from commands.system.volume_control import VolumeControl
-from commands.web.web_handler import WebHandler
+from commands.web.web_handler import KNOWN_SITES, WebHandler
 from config.profile_manager import ProfileManager
 from commands.file_search import FileSearch
 from commands.system.system_handler import SystemHandler
 from commands.ollama_handler import OllamaHandler
+from core.browser import open_url
+from core.honorific import soften
 
 from commands.web import intents_web, intents_youtube
-from commands import intents_apps
-from commands import intents_media
+from commands import intents_apps, intents_media, reminders, small_talk
+from commands.skills import find_skill
 from commands.system import intents_system, intents_volume, intents_utils, intents_display, intents_scan, intents_connectivity
 from commands import todo_handler
 from commands.profanity_filter import check_profanity
@@ -28,6 +25,7 @@ from commands.profanity_filter import check_profanity
 from nlu.intent_service import IntentService
 from nlu.router import IntentRouter
 from nlu.fallback import FallbackPolicy
+from nlu.speech_fix import fix_speech
 from nlu import actions
 from nlu.numbers import ru_numbers_to_digits
 
@@ -37,6 +35,18 @@ FUZZY_MAX_WORDS = 3      # нечёткое совпадение только д
 FUZZY_MIN_SCORE = 85     # порог fuzz.ratio (0-100)
 ACT_MIN_CONFIDENCE = 0.50   # выше: выполняем команду по намерению
 CHAT_MIN_CONFIDENCE = 0.8  # выше: это разговор, ключевые слова не проверяем
+
+
+CONTROL_REPLIES = {"SHUTDOWN", "CONFIRM_SHUTDOWN_PC", "SLEEP_MODE"}
+LAUNCH_VERBS = ("открой", "запусти", "включи", "запускай", "вруби", "загрузи")
+GREETINGS = {"привет", "здравствуй", "здравствуйте", "доброе утро", "добрый день",
+             "добрый вечер", "хай", "салют"}
+GREETING_REPLIES = [
+    "Здравствуйте, {name}. Рад вас слышать.",
+    "Привет, {name}! Чем займёмся?",
+    "Добро пожаловать, {name}. Всё готово к работе.",
+    "О, {name}! А я уже начал скучать по вашим командам.",
+]
 
 
 class CommandContext:
@@ -77,8 +87,9 @@ class CommandHandler:
         self.speaker = speaker
 
         self.ollama = OllamaHandler()
-        self.intent_service = IntentService(self.ollama)
+        self.intent_service = IntentService()
         self.fallback = FallbackPolicy()
+        self.last_was_chat = False   # последний ответ был разговором (продлеваем диалог)
 
         self.ctx = CommandContext(
             speaker=speaker,
@@ -90,6 +101,7 @@ class CommandHandler:
             profile=self.profile,
         )
         self.router = IntentRouter(self.ctx)
+        reminders.start_scheduler(speaker)
 
         self.command_map = [
             # Поиск / информация
@@ -274,26 +286,50 @@ class CommandHandler:
 
     # ------------------------------------------------------------ разбор команды
 
-    def handle(self, text: str) -> str:
-        """Разбор команды: маты -> мультикоманды -> распознавание намерения -> ключевые слова."""
-        # 0. Проверка на грубость / маты (живой юморной ответ)
+    def handle(self, text: str, alternatives=()) -> str:
+        """Выполняет команду и возвращает ответ. Обращение («сэр») оставляется
+        в ответе лишь иногда. alternatives — запасные варианты фразы от
+        распознавателя речи."""
+        reply = self._dispatch(text, alternatives)
+        return reply if reply in CONTROL_REPLIES else soften(reply)
+
+    def _dispatch(self, text: str, alternatives=()) -> str:
+        """Разбор команды: маты -> навыки -> мультикоманды -> намерение -> ключевые слова."""
+        self.last_was_chat = False
+
         profanity_reply = check_profanity(text)
         if profanity_reply:
             return self.ctx.reply(profanity_reply)
 
-        # Проверяем, не является ли фраза составной ("открой ютуб и телеграм")
+        # Навыки с однозначной формулировкой («включи песню А и Б», «выбери между…»)
+        # разбирают фразу целиком, чтобы не разрезать её по союзу «и»
+        phrase = self._clean(ru_numbers_to_digits(text.lower()))
+        found = find_skill(self._fix(phrase, alternatives))
+        if found and found.exclusive:
+            reply = self._run_skill(found, self._fix(phrase, alternatives))
+            if reply is not None:
+                return reply
+
         sub_commands = self._split_multi_command(text)
         if sub_commands and len(sub_commands) > 1:
             print(f"[MULTI] Обнаружено несколько команд: {sub_commands}")
-            replies = []
-            for sub_cmd in sub_commands:
-                r = self._handle_single(sub_cmd)
-                if r:
-                    replies.append(r)
+            replies = [r for r in (self._handle_single(c) for c in sub_commands) if r]
             if replies:
                 return ". ".join(replies)
 
-        return self._handle_single(text)
+        return self._handle_single(text, alternatives)
+
+    def _fix(self, clean_text: str, alternatives=()) -> str:
+        """Исправляет названия программ, которые распознаватель услышал неверно."""
+        return fix_speech(clean_text, [self._clean(a.lower()) for a in alternatives],
+                          self.app_launcher.known_names())
+
+    def _run_skill(self, found, clean_text: str):
+        try:
+            return found.handler(Command(clean_text), self.ctx)
+        except Exception as e:
+            print(f"[SKILL] Ошибка навыка {found.name}: {e}")
+            return self.ctx.reply("Не получилось выполнить команду")
 
     def _split_multi_command(self, text: str) -> list[str] | None:
         """Разбивает фразу типа 'открой ютуб и телеграм' или 'включи музыку и закрой стим'."""
@@ -342,30 +378,37 @@ class CommandHandler:
 
         return final_commands
 
-    def _handle_single(self, text: str) -> str:
+    def _handle_single(self, text: str, alternatives=()) -> str:
         """Обработка одной атомарной команды."""
         text_with_digits = ru_numbers_to_digits(text)
-        cmd = Command(text_with_digits)
-        clean_text = self._clean(cmd.text_lower)
+        clean_text = self._fix(self._clean(text_with_digits.lower()), alternatives)
+        cmd = Command(clean_text)
 
-        # 1. Приветствия — отвечаем голосом, никогда не гуглим
-        if clean_text in ("привет", "здравствуй", "здравствуйте", "доброе утро", "добрый день", "добрый вечер", "хай", "салют"):
-            return self.ctx.reply(f"Здравствуйте, {self.profile.name}")
+        # Навыки: музыка, проекты, напоминания, случайности и т.д.
+        found = find_skill(clean_text)
+        if found:
+            reply = self._run_skill(found, clean_text)
+            if reply is not None:
+                return reply
 
-        # 2. Вопросы о статусе
-        if clean_text in ("как дела", "как ты", "что делаешь", "ты тут", "ты здесь", "как жизнь"):
-            return self.ctx.reply("Все системы функционируют в штатном режиме")
+        # «открой ютуб / гитхаб / почту…» — сайты из списка известных
+        site = re.match(r"^(?:открой|включи|запусти|зайди на|зайди в)\s+(.+)$", clean_text)
+        if site and site.group(1) in KNOWN_SITES:
+            return self.ctx.reply(f"Открываю {site.group(1)}") if open_url(KNOWN_SITES[site.group(1)]) is None else None
 
-        # 3. Благодарность
-        if clean_text in ("спасибо", "благодарю", "от души"):
-            return self.ctx.reply("Всегда рад помочь")
+        # Приветствия и короткие реплики вежливости — без поиска и классификатора
+        if clean_text in GREETINGS:
+            return self.ctx.reply(random.choice(GREETING_REPLIES).format(name=self.profile.name))
+        talk = small_talk.reply(clean_text) if len(clean_text.split()) <= 3 else None
+        if talk:
+            return self.ctx.reply(talk)
 
-        # 4. Команды управления громкостью («звук 10», «звук десять», «звук на 50», «громкость 30»)
+        # Команды управления громкостью («звук 10», «звук десять», «звук на 50», «громкость 30»)
         if clean_text.startswith("звук") or clean_text.startswith("громкость"):
             if any(w in clean_text for w in ("максимум", "минимум", "полную", "всю", "сто", "ноль")) or re.search(r'\d+', clean_text):
                 return intents_volume.handle_volume_set(cmd, self.ctx)
 
-        # 5. Обработка команд закрытия / выключения (чтобы исключить ложное открытие приложений)
+        # Обработка команд закрытия / выключения (чтобы исключить ложное открытие приложений)
         close_verbs = ("закрой", "закрыть", "выключи", "выруби", "отруби", "заверши", "завершить", "останови", "убей", "убери", "погаси", "потуши")
         if any(clean_text.startswith(v + " ") or clean_text == v for v in close_verbs):
             if any(w in clean_text for w in ("музыку", "музыка", "песню", "песня", "трек", "плеер", "звуки", "воспроизведение")):
@@ -374,22 +417,20 @@ class CommandHandler:
                 return intents_volume.handle_mute(cmd, self.ctx)
             return intents_apps.handle_close(cmd, self.ctx)
 
-        # 6. Мгновенное открытие приложения, если сказано только его название («телега», «телеграм», «стим», «дискорд»)
-        if clean_text in self.app_launcher.memory.get("apps", {}):
+        # Сказано только название программы («телега», «стим», «дискорд»)
+        apps = self.app_launcher.memory.get("apps", {})
+        stem = clean_text[:-1] + "а" if clean_text.endswith("у") and len(clean_text) > 2 else None
+        if clean_text in apps or (stem and stem in apps):
             return self.app_launcher.launch(clean_text, self.profile.honorific)
-        if clean_text.endswith("у") and len(clean_text) > 2:
-            base_a = clean_text[:-1] + "а"
-            if base_a in self.app_launcher.memory.get("apps", {}):
-                return self.app_launcher.launch(clean_text, self.profile.honorific)
 
-        # 7. Если в фразе есть имя приложения из памяти
+        # Глагол запуска + название программы где-то в фразе
         words = clean_text.split()
-        if not any(stop in clean_text for stop in ("закрой", "закрыть", "выключи", "выруби", "заверши", "останови", "удали", "стоп")):
-            for w in sorted(self.app_launcher.memory.get("apps", {}).keys(), key=len, reverse=True):
-                if len(w) >= 3 and (w in words or f" {w} " in f" {clean_text} "):
-                    return self.app_launcher.launch(w, self.profile.honorific)
+        if any(v in words for v in LAUNCH_VERBS):
+            for name in sorted(apps, key=len, reverse=True):
+                if len(name) >= 3 and f" {name} " in f" {clean_text} ":
+                    return self.app_launcher.launch(name, self.profile.honorific)
 
-        # 7. Классификатор намерений (NLU)
+        # Классификатор намерений (NLU)
         result = self.intent_service.classify(cmd.text)
         print(f"[NLU] intent={result.intent}  target={result.target_en}  "
               f"query={result.params.get('query') or result.target_ru}  "
@@ -449,29 +490,25 @@ class CommandHandler:
             return self.ctx.reply("Не получилось выполнить команду")
 
     def _chat(self, cmd, result) -> str:
+        """Разговор: языковая модель, а без неё — живые заготовки."""
+        search_words = ("загугли", "прогугли", "погугли", "поищи", "найди в интернете",
+                        "найди в сети", "поиск в гугле", "что такое", "кто такой")
+        if any(w in cmd.text_lower for w in search_words):
+            query = cmd.text_lower
+            for w in search_words:
+                query = query.replace(w, "")
+            query = self._clean(query)
+            open_url(f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}")
+            return self.ctx.reply(f"Ищу информацию по запросу «{query}» в браузере")
+
+        self.last_was_chat = True
         if result.chat_reply:
             return result.chat_reply
         if self.ollama.is_available():
             reply = self.ollama.chat(cmd.text)
             if reply:
                 return reply
-
-        search_words = ("загугли", "прогугли", "погугли", "поищи", "найди в интернете", "найди в сети", "поиск в гугле", "что такое", "кто такой")
-        if any(w in cmd.text_lower for w in search_words):
-            clean = self._clean(cmd.text_lower)
-            for w in search_words:
-                clean = clean.replace(w, "").strip()
-            url = f"https://www.google.com/search?q={clean.replace(' ', '+')}"
-            try:
-                import subprocess
-                cmd_p = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", f"Start-Process '{url}'"]
-                subprocess.Popen(cmd_p, creationflags=subprocess.CREATE_NO_WINDOW)
-            except Exception:
-                import webbrowser
-                webbrowser.open(url)
-            return self.ctx.reply(f"Ищу информацию по запросу «{clean}» в браузере")
-
-        return self.ctx.reply("Не совсем понял команду. Повторите, пожалуйста")
+        return small_talk.reply(cmd.text_lower) or small_talk.fallback()
 
     # --------------------------------------------- запасной разбор по ключевым словам
 

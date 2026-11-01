@@ -1,5 +1,4 @@
 import os
-import sys
 import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -11,12 +10,15 @@ from config.setup_wizard import (
     load_config, save_config,
     MUSIC_PLAYERS, MOVIE_SOURCES, ANIME_SOURCES, DEFAULT_CITIES
 )
+from config.profile_manager import ProfileManager
 from config.audio_device_manager import AudioDeviceManager
 from core.logging_utils import subscribe_log, unsubscribe_log, get_log_file_path, log
-from commands.system.volume_control import VolumeControl
+from commands import catalog, reminders
+from commands.skills.dev import IDES
+from core import notifier
 from commands.todo_handler import (
     get_all_todos, add_todo, delete_todo_by_index,
-    toggle_todo_by_index, clear_done, clear_all, set_reminder
+    toggle_todo_by_index, clear_done, clear_all
 )
 
 try:
@@ -174,13 +176,12 @@ class SplashScreen:
 class MainWindow:
     def __init__(self, root: tk.Tk, profile_name: str,
                  honorific: str, on_exit=None, on_command=None,
-                 listener=None, volume_control=None, speaker=None):
+                 listener=None, speaker=None):
         self.root = root
         self.on_exit = on_exit
         self.on_command = on_command
         self.listener = listener
         self.speaker = speaker
-        self.volume_control = volume_control or VolumeControl()
         self.audio_manager = AudioDeviceManager()
 
         self.root.title("JARVIS — Центр управления")
@@ -592,8 +593,7 @@ class MainWindow:
         task = self._remind_task_var.get().strip() or "Напоминание"
         mins = self._remind_min_var.get().strip()
         phrase = f"напомни через {mins} минут {task}"
-        set_reminder(phrase, self.speaker)
-        messagebox.showinfo("Напоминание", f"Таймер установлен: через {mins} мин ({task})")
+        messagebox.showinfo("Напоминание", reminders.set_reminder(phrase))
 
     # ==========================================
     # 3. СТРАНИЦА: БАЗА КОМАНД (СПРАВКА)
@@ -603,103 +603,83 @@ class MainWindow:
 
         top_bar = tk.Frame(frame, bg="#070d17")
         top_bar.pack(fill="x", padx=18, pady=(12, 6))
-
         tk.Label(
-            top_bar, text="БАЗА ГОЛОСОВЫХ КОМАНД JARVIS",
-            font=("Courier New", 13, "bold"),
-            fg="#1a7fbf", bg="#070d17"
+            top_bar, text="ЧТО УМЕЕТ JARVIS",
+            font=("Courier New", 13, "bold"), fg="#1a7fbf", bg="#070d17"
         ).pack(side="left")
 
+        self._cmd_search_var = tk.StringVar()
+        search_entry = tk.Entry(
+            top_bar, textvariable=self._cmd_search_var, width=28,
+            font=("Courier New", 10), bg="#040912", fg="#c3d4ff",
+            insertbackground="#1a7fbf", relief="flat",
+            highlightthickness=1, highlightbackground="#0d2035", highlightcolor="#1a7fbf"
+        )
+        search_entry.pack(side="right", ipady=3)
+        tk.Label(top_bar, text="🔍 Поиск:", font=("Courier New", 9),
+                 fg="#4e729a", bg="#070d17").pack(side="right", padx=6)
+        self._cmd_search_var.trace_add("write", lambda *_: self._render_catalog())
+
         tk.Label(
-            top_bar, text="Кликните на команду для быстрого запуска",
-            font=("Courier New", 8), fg="#4e729a", bg="#070d17"
-        ).pack(side="right")
+            frame, text="Нажмите на любую фразу, и Джарвис выполнит её. Голосом: скажите «Джарвис», затем фразу.",
+            font=("Courier New", 8), fg="#4e729a", bg="#070d17", anchor="w"
+        ).pack(fill="x", padx=18)
 
         container = tk.Frame(frame, bg="#040912", highlightbackground="#0d2035", highlightthickness=1)
         container.pack(fill="both", expand=True, padx=18, pady=(6, 12))
 
-        canvas = tk.Canvas(container, bg="#040912", highlightthickness=0)
-        sb = tk.Scrollbar(container, command=canvas.yview, bg="#040912")
-        canvas.configure(yscrollcommand=sb.set)
-
+        self._cmd_canvas = tk.Canvas(container, bg="#040912", highlightthickness=0)
+        sb = tk.Scrollbar(container, command=self._cmd_canvas.yview, bg="#040912")
+        self._cmd_canvas.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
+        self._cmd_canvas.pack(side="left", fill="both", expand=True)
 
-        scroll_frame = tk.Frame(canvas, bg="#040912")
-        scroll_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        self._cmd_inner = tk.Frame(self._cmd_canvas, bg="#040912")
+        window_id = self._cmd_canvas.create_window((0, 0), window=self._cmd_inner, anchor="nw")
+        self._cmd_inner.bind(
+            "<Configure>", lambda e: self._cmd_canvas.configure(scrollregion=self._cmd_canvas.bbox("all")))
+        self._cmd_canvas.bind(
+            "<Configure>", lambda e: self._cmd_canvas.itemconfigure(window_id, width=e.width))
+        self._cmd_canvas.bind(
+            "<Enter>", lambda e: self._cmd_canvas.bind_all("<MouseWheel>", self._on_cmd_wheel))
+        self._cmd_canvas.bind(
+            "<Leave>", lambda e: self._cmd_canvas.unbind_all("<MouseWheel>"))
 
-        categories = [
-            ("🎵 Музыка и звук", [
-                "включи музыку", "поставь песню звери районы кварталы",
-                "пауза", "продолжи", "следующий трек", "предыдущий трек",
-                "громкость 50", "звук 10", "громче", "тише", "выключи звук", "включи звук"
-            ]),
-            ("🎬 Фильмы и Аниме", [
-                "хочу посмотреть аниме восхождение в тени",
-                "посмотреть аниме наруто",
-                "хочу посмотреть фильм интерстеллар",
-                "давай посмотрим фильм бойцовский клуб"
-            ]),
-            ("🌐 Поиск, погода и валюты", [
-                "какая завтра будет погода",
-                "какая погода в самаре",
-                "курс доллара",
-                "курс евро",
-                "найди на ютубе уроки python",
-                "загугли рецепт борща"
-            ]),
-            ("📋 Задачи и напоминания (To-Do)", [
-                "добавь в список дел выпить таблетку",
-                "список дел",
-                "озвучь список дел на сегодня",
-                "дело выполнено",
-                "напомни через 30 минут выпить таблетку"
-            ]),
-            ("💻 Управление Windows и экранами", [
-                "открой проводник", "открой диспетчер задач",
-                "открой калькулятор", "сделай скриншот",
-                "закрой стим", "закрой телеграм",
-                "заблокируй компьютер", "расширь экраны", "дублируй экраны"
-            ]),
-            ("📡 Сеть и беспроводная связь", [
-                "включи блютуз", "выключи блютуз",
-                "включи вай фай", "выключи вай фай",
-                "включи точку доступа", "режим в самолёте"
-            ]),
-            ("⚡ Мультикоманды (цепочки)", [
-                "открой ютуб и телеграм",
-                "включи музыку и сделай громче",
-                "закрой стим и дискорд"
-            ]),
-        ]
-
-        for cat_title, cmds in categories:
-            cat_frame = tk.Frame(scroll_frame, bg="#070d17", highlightbackground="#0d2035", highlightthickness=1)
-            cat_frame.pack(fill="x", padx=12, pady=6, expand=True)
-
-            tk.Label(
-                cat_frame, text=cat_title, font=("Courier New", 10, "bold"),
-                fg="#1a7fbf", bg="#070d17"
-            ).pack(anchor="w", padx=10, pady=(6, 4))
-
-            chips_frame = tk.Frame(cat_frame, bg="#070d17")
-            chips_frame.pack(fill="x", padx=8, pady=(0, 6))
-
-            for c in cmds:
-                btn = tk.Button(
-                    chips_frame, text=f"«{c}»",
-                    font=("Courier New", 8), fg="#c3d4ff", bg="#0a1628",
-                    activebackground="#1a7fbf", activeforeground="#ffffff",
-                    relief="flat", padx=6, pady=3,
-                    command=lambda cmd_text=c: self._send_quick_cmd(cmd_text)
-                )
-                btn.pack(side="left", padx=3, pady=3)
-
+        self._render_catalog()
         return frame
+
+    def _on_cmd_wheel(self, event):
+        self._cmd_canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def _render_catalog(self):
+        for child in self._cmd_inner.winfo_children():
+            child.destroy()
+
+        categories = catalog.search(self._cmd_search_var.get())
+        if not categories:
+            tk.Label(self._cmd_inner, text="Ничего не найдено", font=("Courier New", 10),
+                     fg="#4e729a", bg="#040912").pack(pady=20)
+            return
+
+        for category in categories:
+            box = tk.Frame(self._cmd_inner, bg="#070d17", highlightbackground="#0d2035", highlightthickness=1)
+            box.pack(fill="x", padx=12, pady=6)
+            tk.Label(box, text=category.title, font=("Courier New", 10, "bold"),
+                     fg="#1a7fbf", bg="#070d17").pack(anchor="w", padx=10, pady=(6, 2))
+
+            for item in category.items:
+                tk.Label(box, text=item.description, font=("Courier New", 9),
+                         fg="#c3d4ff", bg="#070d17", justify="left", anchor="w",
+                         wraplength=720).pack(fill="x", padx=14, pady=(6, 1))
+                for example in item.examples:
+                    tk.Button(
+                        box, text=f"▶  «{example}»", anchor="w", justify="left",
+                        font=("Courier New", 8), fg="#7fd1ff", bg="#0a1628",
+                        activebackground="#1a7fbf", activeforeground="#ffffff",
+                        relief="flat", padx=8, pady=2, cursor="hand2",
+                        command=lambda text=example: self._send_quick_cmd(text)
+                    ).pack(fill="x", padx=22, pady=1)
+            tk.Frame(box, height=6, bg="#070d17").pack()
 
     # ==========================================
     # 4. СТРАНИЦА: РАСШИРЕННЫЕ НАСТРОЙКИ
@@ -804,6 +784,12 @@ class MainWindow:
         )
         add_setting_row(sec_sources, "Сайт для аниме:", anime_cb)
 
+        self._map_labels = {"google": "Google Карты", "yandex": "Яндекс Карты"}
+        self._map_var = tk.StringVar(value=self._map_labels.get(cfg.get("map_provider", "google"), "Google Карты"))
+        add_setting_row(sec_sources, "Карты и отзывы:", ttk.Combobox(
+            sec_sources, textvariable=self._map_var, values=list(self._map_labels.values()),
+            state="readonly", font=("Courier New", 9)))
+
         # ---------------- СЕКЦИЯ 3: ЗВУК И МИКРОФОН ----------------
         sec_audio = make_section("🎧 ЗВУК, МИКРОФОН И КОНТЕКСТ")
 
@@ -824,27 +810,45 @@ class MainWindow:
         )
         add_setting_row(sec_audio, "Микрофон:", mic_cb)
 
-        # Регулятор громкости
+        # Громкость голоса Джарвиса (системный звук не меняется)
         vol_frame = tk.Frame(sec_audio, bg="#070d17")
         vol_frame.pack(fill="x", padx=12, pady=4)
         tk.Label(
-            vol_frame, text="Громкость системы:", font=("Courier New", 9),
+            vol_frame, text="Громкость голоса Джарвиса:", font=("Courier New", 9),
             fg="#c3d4ff", bg="#070d17", width=26, anchor="w"
         ).pack(side="left")
 
-        current_vol = self.volume_control.get_volume() if self.volume_control else 50
-        self._vol_var = tk.IntVar(value=current_vol)
+        self._vol_var = tk.IntVar(value=int(cfg.get("voice_volume", 100)))
         vol_slider = ttk.Scale(
             vol_frame, from_=0, to=100, variable=self._vol_var,
             orient="horizontal", command=self._on_volume_slider_change
         )
         vol_slider.pack(side="left", fill="x", expand=True, padx=8)
+        vol_slider.bind("<ButtonRelease-1>", lambda e: self._preview_voice())
 
         self._vol_lbl = tk.Label(
-            vol_frame, text=f"{current_vol}%", font=("Courier New", 9, "bold"),
+            vol_frame, text=f"{self._vol_var.get()}%", font=("Courier New", 9, "bold"),
             fg="#1a7fbf", bg="#070d17", width=5
         )
         self._vol_lbl.pack(side="left")
+
+        # Как часто добавлять «сэр»
+        chance_frame = tk.Frame(sec_audio, bg="#070d17")
+        chance_frame.pack(fill="x", padx=12, pady=4)
+        tk.Label(
+            chance_frame, text="Как часто говорить «сэр»:", font=("Courier New", 9),
+            fg="#c3d4ff", bg="#070d17", width=26, anchor="w"
+        ).pack(side="left")
+        self._honor_chance_var = tk.IntVar(value=round(float(cfg.get("honorific_chance", 0.25)) * 100))
+        ttk.Scale(
+            chance_frame, from_=0, to=100, variable=self._honor_chance_var,
+            orient="horizontal", command=self._on_honor_chance_change
+        ).pack(side="left", fill="x", expand=True, padx=8)
+        self._honor_chance_lbl = tk.Label(
+            chance_frame, text=f"{self._honor_chance_var.get()}%", font=("Courier New", 9, "bold"),
+            fg="#1a7fbf", bg="#070d17", width=5
+        )
+        self._honor_chance_lbl.pack(side="left")
 
         # Таймаут ожидания контекста
         timeout_frame = tk.Frame(sec_audio, bg="#070d17")
@@ -966,6 +970,69 @@ class MainWindow:
             font=("Courier New", 7), fg="#4e729a", bg="#070d17", justify="left"
         ).pack(anchor="w", padx=12, pady=(2, 6))
 
+        # ---------------- СЕКЦИЯ: НАПОМИНАНИЯ ----------------
+        sec_notify = make_section("🔔 УВЕДОМЛЕНИЯ О НАПОМИНАНИЯХ")
+        tk.Label(
+            sec_notify,
+            text="Напоминание всегда произносится голосом. Дополнительно оно придёт сюда:",
+            font=("Courier New", 8), fg="#4e729a", bg="#070d17"
+        ).pack(anchor="w", padx=12)
+
+        self._notify_labels = {"pc": "Уведомление на компьютере", "telegram": "Сообщение в Telegram",
+                               "both": "Компьютер и Telegram"}
+        self._notify_var = tk.StringVar(
+            value=self._notify_labels.get(cfg.get("notify_channel", "pc"), self._notify_labels["pc"]))
+        add_setting_row(sec_notify, "Куда присылать:", ttk.Combobox(
+            sec_notify, textvariable=self._notify_var, values=list(self._notify_labels.values()),
+            state="readonly", font=("Courier New", 9)))
+
+        entry_style = dict(font=("Courier New", 9), bg="#040912", fg="#1a7fbf", relief="flat",
+                           highlightthickness=1, highlightbackground="#0d2035")
+        self._tg_token_var = tk.StringVar(value=cfg.get("telegram_token", ""))
+        add_setting_row(sec_notify, "Токен Telegram-бота:", tk.Entry(
+            sec_notify, textvariable=self._tg_token_var, show="•", **entry_style))
+        self._tg_chat_var = tk.StringVar(value=cfg.get("telegram_chat_id", ""))
+        add_setting_row(sec_notify, "Chat ID:", tk.Entry(
+            sec_notify, textvariable=self._tg_chat_var, **entry_style))
+
+        notify_bar = tk.Frame(sec_notify, bg="#070d17")
+        notify_bar.pack(fill="x", padx=12, pady=(2, 4))
+        button_style = dict(font=("Courier New", 8, "bold"), fg="#ffffff", bg="#2a3b5c",
+                            activebackground="#3d5584", relief="flat", padx=10, pady=4)
+        tk.Button(notify_bar, text="🔎 Найти Chat ID", command=self._on_detect_chat_id,
+                  **button_style).pack(side="left")
+        tk.Button(notify_bar, text="📨 Проверить уведомление", command=self._on_test_notification,
+                  **button_style).pack(side="left", padx=8)
+        self._notify_status_lbl = tk.Label(notify_bar, text="", font=("Courier New", 8),
+                                           fg="#50fa7b", bg="#070d17")
+        self._notify_status_lbl.pack(side="left", padx=6)
+        tk.Label(
+            sec_notify,
+            text="💡 Telegram: создайте бота у @BotFather, вставьте токен, напишите боту любое\nсообщение и нажмите «Найти Chat ID».",
+            font=("Courier New", 7), fg="#4e729a", bg="#070d17", justify="left"
+        ).pack(anchor="w", padx=12, pady=(2, 6))
+
+        # ---------------- СЕКЦИЯ: РАЗРАБОТКА ----------------
+        sec_dev = make_section("💻 РАЗРАБОТКА")
+        projects_row = tk.Frame(sec_dev, bg="#070d17")
+        self._projects_root_var = tk.StringVar(value=cfg.get("projects_root", ""))
+        tk.Entry(projects_row, textvariable=self._projects_root_var, **entry_style).pack(
+            side="left", fill="x", expand=True)
+        tk.Button(projects_row, text="Обзор…", command=self._on_browse_projects,
+                  **button_style).pack(side="left", padx=(6, 0))
+        add_setting_row(sec_dev, "Папка с проектами:", projects_row)
+
+        self._ide_titles = {i: spec["title"] for i, spec in IDES.items()}
+        self._ide_var = tk.StringVar(value=self._ide_titles.get(cfg.get("default_ide", "idea"), "IntelliJ IDEA"))
+        add_setting_row(sec_dev, "IDE по умолчанию:", ttk.Combobox(
+            sec_dev, textvariable=self._ide_var, values=list(self._ide_titles.values()),
+            state="readonly", font=("Courier New", 9)))
+        tk.Label(
+            sec_dev,
+            text="💡 Скажите: «открой проект <название папки>» или «открой <проект> в идее».",
+            font=("Courier New", 7), fg="#4e729a", bg="#070d17"
+        ).pack(anchor="w", padx=12, pady=(2, 6))
+
         # ---------------- СЕКЦИЯ 4: СИСТЕМА ----------------
         sec_sys = make_section("⚙️ СИСТЕМА И АВТОЗАПУСК")
 
@@ -1008,8 +1075,48 @@ class MainWindow:
     def _on_volume_slider_change(self, val):
         pct = int(float(val))
         self._vol_lbl.config(text=f"{pct}%")
-        if self.volume_control:
-            self.volume_control.set_volume(pct)
+        ProfileManager().current["voice_volume"] = pct   # действует сразу
+
+    def _preview_voice(self):
+        if self.speaker:
+            threading.Thread(
+                target=lambda: self.speaker.speak("Так звучит мой голос", soften_honorific=False),
+                daemon=True).start()
+
+    def _on_honor_chance_change(self, val):
+        pct = int(float(val))
+        self._honor_chance_lbl.config(text=f"{pct}%")
+        ProfileManager().current["honorific_chance"] = pct / 100
+
+    def _on_browse_projects(self):
+        folder = filedialog.askdirectory(title="Папка с вашими проектами")
+        if folder:
+            self._projects_root_var.set(folder)
+
+    def _on_detect_chat_id(self):
+        token = self._tg_token_var.get().strip()
+        if not token:
+            self._notify_status_lbl.config(text="Сначала вставьте токен", fg="#ff6b6b")
+            return
+        chat_id, error = notifier.detect_chat_id(token)
+        if chat_id:
+            self._tg_chat_var.set(chat_id)
+            self._notify_status_lbl.config(text=f"Найден: {chat_id}", fg="#50fa7b")
+        else:
+            self._notify_status_lbl.config(text=error, fg="#ff6b6b")
+
+    def _on_test_notification(self):
+        channel = next((k for k, v in self._notify_labels.items() if v == self._notify_var.get()), "pc")
+        if channel in ("pc", "both"):
+            notifier.notify_pc("Джарвис", "Проверка уведомлений: всё работает")
+        if channel in ("telegram", "both"):
+            ok, error = notifier.notify_telegram(
+                "Джарвис: проверка уведомлений",
+                token=self._tg_token_var.get().strip(), chat_id=self._tg_chat_var.get().strip())
+            self._notify_status_lbl.config(text="Отправлено" if ok else error,
+                                           fg="#50fa7b" if ok else "#ff6b6b")
+        else:
+            self._notify_status_lbl.config(text="Отправлено", fg="#50fa7b")
 
     def _on_timeout_slider_change(self, val):
         sec = int(float(val))
@@ -1071,6 +1178,17 @@ class MainWindow:
         cfg["silence_ms"] = int(float(self._silence_ms_var.get()))
         cfg["mic_gain"] = round(float(self._mic_gain_var.get()), 1)
         cfg["vosk_model"] = self._vosk_model_var.get().strip()
+        cfg["map_provider"] = next(
+            (k for k, v in self._map_labels.items() if v == self._map_var.get()), "google")
+        cfg["voice_volume"] = int(self._vol_var.get())
+        cfg["honorific_chance"] = round(self._honor_chance_var.get() / 100, 2)
+        cfg["notify_channel"] = next(
+            (k for k, v in self._notify_labels.items() if v == self._notify_var.get()), "pc")
+        cfg["telegram_token"] = self._tg_token_var.get().strip()
+        cfg["telegram_chat_id"] = self._tg_chat_var.get().strip()
+        cfg["projects_root"] = self._projects_root_var.get().strip()
+        cfg["default_ide"] = next(
+            (k for k, v in self._ide_titles.items() if v == self._ide_var.get()), "idea")
 
         # Применяем в listener
         if self.listener:

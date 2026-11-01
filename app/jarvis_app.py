@@ -1,29 +1,22 @@
-import os
-import sys
 import subprocess
+import sys
 import time
 import threading
 import traceback
 import tkinter as tk
 
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
 
 from config.setup_wizard import is_first_run, run_setup
 from config.profile_manager import ProfileManager
-from core.jarvice_voice_player import JarvisVoicePlayer
 from ui.gui import SplashScreen, MainWindow
 from ui.tray import TrayApp
 from core.speakers.speaker import Speaker
 from core.listener import Listener
 from commands.command_handler import CommandHandler
 
-from core.logging_utils import log, log_voice, log_action, log_system, log_error
+from core.logging_utils import log, log_action, log_system, log_error
 from core.startup_mode import should_start_hidden
+from core.voice_loop import VoiceLoop
 
 
 class JarvisApp:
@@ -34,10 +27,9 @@ class JarvisApp:
         self._commands = None
         self._main_win = None
         self._tray = None
-        self._running = False
         self._root = None
         self._start_hidden = should_start_hidden()
-        self._jarvis_voice = JarvisVoicePlayer()
+        self._loop = None
 
     def start(self):
         log_system("JARVIS запускается...")
@@ -142,7 +134,7 @@ class JarvisApp:
             self._main_win.update_speech_info(raw_text=f"[Ручной ввод]: {cmd_text}", command=cmd_text)
             self._main_win.set_home_status("Выполняю команду...")
             log_action(f"Ручная команда: '{cmd_text}'")
-            response = self._commands.handle(cmd_text)
+            response = self._commands.handle(cmd_text)  # ручной ввод: без альтернатив
             self._main_win.update_execution_info(response=response)
             log_action(f"Ответ: {response}")
             if response == "SHUTDOWN":
@@ -151,7 +143,7 @@ class JarvisApp:
             elif response == "SLEEP_MODE":
                 self._speaker.speak_loading()
             else:
-                self._speaker.speak(response)
+                self._speaker.speak(response, soften_honorific=False)
             self._main_win.set_home_status("Системы в норме. Ожидаю команду...")
         except Exception as e:
             log_error(f"Ошибка выполнения ручной команды: {e}")
@@ -168,7 +160,6 @@ class JarvisApp:
                 on_exit=self._on_exit,
                 on_command=self.on_manual_command,
                 listener=self._listener,
-                volume_control=self._commands.volume_control if self._commands else None,
                 speaker=self._speaker,
             )
 
@@ -180,16 +171,14 @@ class JarvisApp:
             else:
                 self._main_win.hide()
 
-            self._running = True
             threading.Thread(target=self._jarvis_loop, daemon=True).start()
         except BaseException:
             log_error(f"Ошибка перехода к главному окну:\n{traceback.format_exc()}")
 
     def _jarvis_loop(self):
         try:
-            if self._main_win:
-                self._main_win.set_status("Ожидаю обращение...")
-                self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
+            self._main_win.set_status("Ожидаю обращение...")
+            self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
             if not self._start_hidden:
                 self._speaker.speak_import()
                 self._speaker.speak_greeting()
@@ -197,147 +186,9 @@ class JarvisApp:
             log_error(f"Ошибка старта голосового цикла:\n{traceback.format_exc()}")
             return
 
-        sleeping = False
-        waiting_for_shutdown_confirm = False
-        in_context = False
-
-        while self._running:
-            try:
-                if sleeping:
-                    self._main_win.set_status("Режим сна [SLEEP]")
-                    self._main_win.set_home_status("Режим сна")
-
-                    trigger = self._listener.listen_wake()
-
-                    if trigger == "wakeup":
-                        sleeping = False
-                        self._speaker.speak_reboot()
-                        self._main_win.set_status("Ожидаю обращение...")
-                        self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-                        log_system("Джарвис вышел из режима сна")
-
-                    elif trigger == "wake":
-                        cmd = self._listener.listen(timeout_sec=4.0)
-                        if cmd and "проснись" in cmd:
-                            sleeping = False
-                            self._speaker.speak_reboot()
-                            self._main_win.set_status("Ожидаю обращение...")
-                            self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-                            log_system("Джарвис проснулся")
-
-                    continue
-
-                if waiting_for_shutdown_confirm:
-                    self._main_win.set_status("Жду подтверждения выключения...")
-                    confirm = self._listener.listen(timeout_sec=6.0)
-                    if confirm and "да" in confirm:
-                        self._speaker.speak_shutdown()
-                        time.sleep(3)
-                        os.system("shutdown /s /t 0")
-                        break
-                    else:
-                        waiting_for_shutdown_confirm = False
-                        self._speaker.speak(f"Отменено, {self._profile.honorific}")
-                        self._main_win.set_status("Ожидаю обращение...")
-                        self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-                        log_system("Выключение компьютера отменено")
-                    continue
-
-                # Таймаут контекста берем из настроек пользователя
-                context_timeout = self._profile.context_timeout if self._profile else 5.0
-
-                if in_context:
-                    self._main_win.set_status(f"Слушаю продолжение ({int(context_timeout)} сек)...")
-                    self._main_win.set_home_status("Слушаю диалог без кодового слова...")
-
-                    command_text = self._listener.listen(timeout_sec=context_timeout)
-
-                    # Если за время контекста речи не было — молча выходим из контекста
-                    if not command_text:
-                        in_context = False
-                        log_voice(f"Время контекста ({int(context_timeout)}с) истекло, ожидаю «Джарвис»")
-                        self._main_win.set_status("Ожидаю обращение...")
-                        self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-                        continue
-
-                    raw_text = command_text
-                    from config.settings import WAKE_WORD
-                    if WAKE_WORD in command_text.lower():
-                        command_text = command_text.lower().replace(WAKE_WORD, "").strip()
-
-                    # Фильтрация короткого микрофонного шума
-                    if len(command_text.strip()) < 2:
-                        in_context = False
-                        self._main_win.set_status("Ожидаю обращение...")
-                        self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-                        continue
-
-                    self._main_win.update_speech_info(raw_text=raw_text, command=command_text)
-                    log_voice(f"В контексте распознано: '{command_text}'")
-
-                else:
-                    trigger_data = self._listener.listen_wake_and_command()
-                    if not trigger_data:
-                        continue
-
-                    trigger, command_text, raw_text = trigger_data
-                    self._main_win.update_speech_info(raw_text=raw_text, command=command_text)
-                    log_voice(f"Wake word активен: '{raw_text}'")
-
-                    if trigger == "wakeup":
-                        sleeping = False
-                        self._speaker.speak_reboot()
-                        self._main_win.set_status("Ожидаю обращение...")
-                        self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-                        continue
-
-                    if not command_text:
-                        self._main_win.set_status("Слушаю команду...")
-                        self._main_win.set_home_status("Слушаю команду...")
-                        self._speaker.speak_affirmation()
-                        command_text = self._listener.listen(timeout_sec=5.0)
-                        if command_text:
-                            self._main_win.update_speech_info(raw_text=f"{raw_text} -> {command_text}", command=command_text)
-                            log_voice(f"Команда после обращения: '{command_text}'")
-
-                    if not command_text:
-                        self._speaker.speak(f"Не расслышал, {self._profile.honorific}")
-                        self._main_win.set_status("Ожидаю обращение...")
-                        self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-                        continue
-
-                log_action(f"Выполняется команда: '{command_text}'")
-                self._main_win.set_home_status("Выполняю команду...")
-                response = self._commands.handle(command_text)
-                self._main_win.update_execution_info(response=response)
-                log_action(f"Ответ Джарвиса: '{response}'")
-
-                if response == "SHUTDOWN":
-                    self._speaker.speak_shutdown()
-                    log_system("Завершение сессии")
-                    break
-                elif response == "CONFIRM_SHUTDOWN_PC":
-                    waiting_for_shutdown_confirm = True
-                    in_context = False
-                    self._speaker.speak(f"Вы уверены, {self._profile.honorific}? Это выключит компьютер")
-                elif response == "SLEEP_MODE":
-                    sleeping = True
-                    in_context = False
-                    self._speaker.speak_loading()
-                    log_system("Режим сна активирован")
-                    self._main_win.set_home_status("Режим сна")
-                else:
-                    self._speaker.speak(response)
-                    # Включаем режим контекста
-                    in_context = True
-
-                if not in_context:
-                    self._main_win.set_status("Ожидаю обращение...")
-                    self._main_win.set_home_status("Системы в норме. Ожидаю голосовую команду...")
-
-            except BaseException:
-                log_error(f"Ошибка в основном цикле:\n{traceback.format_exc()}")
-                in_context = False
+        self._loop = VoiceLoop(self._speaker, self._listener, self._commands,
+                               self._profile, ui=self._main_win)
+        self._loop.run()
 
     def ensure_ollama(self):
         import shutil
@@ -372,7 +223,8 @@ class JarvisApp:
 
     def _on_exit(self):
         log_system("JARVIS завершение работы")
-        self._running = False
+        if self._loop:
+            self._loop.stop()
         if self._tray:
             self._tray.stop()
         if self._root:

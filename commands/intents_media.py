@@ -1,6 +1,5 @@
 import ctypes
 import time
-import subprocess
 
 # Виртуальные коды мультимедийных клавиш Windows
 VK_MEDIA_NEXT_TRACK = 0xB0  # 176

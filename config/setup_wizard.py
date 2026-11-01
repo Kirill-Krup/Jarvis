@@ -1,10 +1,8 @@
-import json
-import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 
-CONFIG_PATH = "config/user_config.json"
+from config.store import is_first_run, load_config, save_config  # noqa: F401  (is_first_run/load_config реэкспортируются)
 
 MUSIC_PLAYERS = {
     "YouTube Music": "https://music.youtube.com",
@@ -54,54 +52,6 @@ DEFAULT_CITIES = [
     "Гродно",
     "Гомель",
 ]
-
-
-def is_first_run() -> bool:
-    return not os.path.exists(CONFIG_PATH)
-
-
-def load_config() -> dict:
-    if not os.path.exists(CONFIG_PATH):
-        return get_default_config()
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-            # Заполняем дефолтные значения, если отсутствуют
-            defaults = get_default_config()
-            for k, v in defaults.items():
-                if k not in cfg:
-                    cfg[k] = v
-            return cfg
-    except Exception:
-        return get_default_config()
-
-
-def get_default_config() -> dict:
-    return {
-        "name": "Денис",
-        "honorific": "сэр",
-        "voice": "en-GB-RyanNeural",
-        "speed": "-5%",
-        "pitch": "-10Hz",
-        "city": "Москва",
-        "extra_drives": ["E:/"],
-        "music_player": "YouTube Music",
-        "movie_source": "KinoGo",
-        "anime_source": "AnimeGO",
-        "context_timeout": 5.0,
-        "microphone_index": None,
-        "vad_threshold": 0.5,
-        "silence_ms": 400,
-        "mic_gain": 1.0,
-        "vosk_model": "model_small",
-        "autostart": False,
-    }
-
-
-def save_config(config: dict):
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
 
 
 class SetupWizard:

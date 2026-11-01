@@ -121,8 +121,8 @@ def handle_brightness_monitor(cmd, ctx):
     except ImportError:
         _set_brightness_all(level)
         return ctx.reply(f"Устанавливаю яркость {level} процентов")
-    except Exception as e:
-        return ctx.reply(f"Не удалось изменить яркость монитора")
+    except Exception:
+        return ctx.reply("Не удалось изменить яркость монитора")
 
 
 def handle_display_info(cmd, ctx):

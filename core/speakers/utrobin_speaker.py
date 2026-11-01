@@ -1,128 +1,82 @@
-import sys
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+"""Синтез речи: UtrobinTTS (VITS, ONNX) + расстановка ударений RUAccent."""
 import os
+import queue
 import re
 import threading
-import sounddevice as sd
+
 import numpy as np
 import onnxruntime
-from transformers import AutoTokenizer
-from ruaccent import RUAccent
+
+from core import audio_out
+from core.speakers.base_speaker import BaseSpeaker
 
 try:
     import num2words
 except ImportError:
     num2words = None
 
-from core.speakers.base_speaker import BaseSpeaker
+MODEL_PATH = "voice_samples/model.onnx"
+TOKENIZER_REPO = "utrobinmv/tts_ru_free_hf_vits_low_multispeaker"
+SAMPLE_RATE = 16000
+SPEAKER_ID = 1
+ACCENT_CACHE_LIMIT = 300
+
+_SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
 
 
 def verbalize_numbers(text: str) -> str:
-    """Преобразует любые числа и дроби в тексте в русские слова для TTS."""
+    """Числа и дроби -> русские слова, чтобы TTS их читал."""
     if not num2words:
         return text
 
-    def repl_float(m):
-        full = m.group(0)
+    def frac(m):
         try:
-            parts = full.replace(',', '.').split('.')
-            whole = int(parts[0])
-            frac = int(parts[1])
-            whole_w = num2words.num2words(whole, lang='ru')
-            frac_w = num2words.num2words(frac, lang='ru')
-            return f"{whole_w} целых {frac_w} сотых"
-        except Exception:
-            return full
-
-    def repl_int(m):
-        num = int(m.group(0))
-        try:
-            return num2words.num2words(num, lang='ru')
+            whole, part = m.group(0).replace(",", ".").split(".")
+            return (f"{num2words.num2words(int(whole), lang='ru')} целых "
+                    f"{num2words.num2words(int(part), lang='ru')} сотых")
         except Exception:
             return m.group(0)
 
-    # 1. Сначала десятичные дроби (80.68, 2,95)
-    text = re.sub(r'\b\d+[.,]\d+\b', repl_float, text)
-    # 2. Затем целые числа (10, 50, 100)
-    text = re.sub(r'\b\d+\b', repl_int, text)
-    return text
+    def integer(m):
+        try:
+            return num2words.num2words(int(m.group(0)), lang="ru")
+        except Exception:
+            return m.group(0)
+
+    text = re.sub(r"\b\d+[.,]\d+\b", frac, text)
+    return re.sub(r"\b\d+\b", integer, text)
 
 
 class UtrobinSpeaker(BaseSpeaker):
     def __init__(self):
-        self._accent_cache = {
-            "открываю проводник, сэр": "открыв+аю проводн+ик, с+эр",
-            "запускаю проводник, сэр": "запуск+аю проводн+ик, с+эр",
-            "запускаю телеграм, сэр": "запуск+аю телегр+ам, с+эр",
-            "запускаю телега, сэр": "запуск+аю тел+ега, с+эр",
-            "запускаю телегу, сэр": "запуск+аю тел+егу, с+эр",
-            "запускаю стим, сэр": "запуск+аю ст+им, с+эр",
-            "запускаю дискорд, сэр": "запуск+аю диск+орд, с+эр",
-            "запускаю яндекс, сэр": "запуск+аю +яндекс, с+эр",
-            "запускаю гугл хром, сэр": "запуск+аю г+угл хр+ом, с+эр",
-            "запускаю браузер, сэр": "запуск+аю бр+аузер, с+эр",
-            "запускаю калькулятор, сэр": "запуск+аю калькул+ятор, с+эр",
-            "запускаю блокнот, сэр": "запуск+аю блокн+от, с+эр",
-            "сделано, сэр": "сд+елано, с+эр",
-            "не расслышал, сэр": "не рассл+ышал, с+эр",
-            "слушаю, сэр": "сл+ушаю, с+эр",
-            "аудиосистемы выключены": "аудиосист+емы в+ыключены",
-            "устанавливаю громкость на 100 процентов, сэр": "устанавл+иваю гр+омкость на сто проц+ентов, с+эр",
-            "устанавливаю громкость на 50 процентов, сэр": "устанавл+иваю гр+омкость на пятьдес+ят проц+ентов, с+эр",
-            "все системы в норме. добро пожаловать, денис. чем могу помочь, сэр?": "все сист+емы в н+орме. добр+о пож+аловать, ден+ис. чем мог+у пом+очь, с+эр?",
-            "импортирую настройки, системы в норме": "импорт+ирую настр+ойки, сист+емы в н+орме",
-            "снова в строю, сэр": "сн+ова в стро+ю, с+эр",
-            "загружаю, сэр": "загруж+аю, с+эр",
-            "отключаю питание. до встречи, сэр": "отключ+аю пит+ание. до встр+ечи, с+эр",
-        }
+        self._accent_cache: dict[str, str] = {}
+        self._lock = threading.Lock()   # одна реплика за раз
         self._load_model()
         print("UtrobinSpeaker готов [OK]")
 
     def _load_model(self):
-        print("Загружаю голосовую модель UtrobinTTS...")
-
-        model_path = "voice_samples/model.onnx"
-
-        if not os.path.exists(model_path):
+        if not os.path.exists(MODEL_PATH):
             raise FileNotFoundError(
-                f"Файл модели не найден: {model_path}\n"
-                f"Скачайте model.onnx из:\n"
-                f"https://huggingface.co/utrobinmv/tts_ru_free_hf_vits_low_multispeaker"
-            )
+                f"Файл модели не найден: {MODEL_PATH}\n"
+                f"Скачайте model.onnx из https://huggingface.co/{TOKENIZER_REPO}")
 
-        sess_options = onnxruntime.SessionOptions()
-        self.model = onnxruntime.InferenceSession(model_path, sess_options=sess_options)
+        opts = onnxruntime.SessionOptions()
+        opts.intra_op_num_threads = 2
+        self.model = onnxruntime.InferenceSession(
+            MODEL_PATH, sess_options=opts, providers=["CPUExecutionProvider"])
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "utrobinmv/tts_ru_free_hf_vits_low_multispeaker"
-        )
-
+        from transformers import AutoTokenizer
+        from ruaccent import RUAccent
+        self.tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_REPO)
         self.accentizer = RUAccent()
-        self.accentizer.load(omograph_model_size='turbo', use_dictionary=True)
+        self.accentizer.load(omograph_model_size="turbo", use_dictionary=True)
 
-        self.sample_rate = 16000
-        self.speaker_id = 1
-
-        # Мгновенный прогрев ONNX графа
-        try:
-            inp = self.tokenizer("пр+ивет", return_tensors="np")
-            self.model.run(
-                None,
-                {
-                    "input_ids": inp["input_ids"],
-                    "attention_mask": inp["attention_mask"],
-                    "sid": np.array([self.speaker_id]),
-                },
-            )
+        try:  # прогрев графа, чтобы первая фраза не тормозила
+            self._synthesize("пр+ивет")
         except Exception:
             pass
 
-        print(f"[OK] UtrobinTTS загружен, sample_rate={self.sample_rate}, speaker_id={self.speaker_id}")
+    # ------------------------------------------------------------------ API
 
     def speak(self, text: str):
         if not text or not str(text).strip():
@@ -130,59 +84,56 @@ class UtrobinSpeaker(BaseSpeaker):
         text = verbalize_numbers(str(text))
         print(f"Джарвис: {text}")
 
-        max_retries = 2
-        for attempt in range(max_retries + 1):
+        sentences = [s.strip() for s in _SENTENCE_RE.split(text) if s.strip()]
+        with self._lock:
             try:
-                audio_thread = threading.Thread(target=self._generate_and_play, args=(text,))
-                audio_thread.start()
-                audio_thread.join(timeout=15)
-                if audio_thread.is_alive():
-                    print(f"[TTS] Таймаут генерации речи (попытка {attempt + 1})")
-                    continue
-                return  # Успех — выходим
+                self._speak_pipelined(sentences)
             except Exception as e:
-                print(f"Ошибка UtrobinSpeaker (попытка {attempt + 1}): {e}")
-                if attempt < max_retries:
-                    import time
-                    time.sleep(0.3)
-        print(f"[TTS] Не удалось озвучить после {max_retries + 1} попыток: {text[:50]}")
+                print(f"[TTS] Ошибка озвучки: {e}")
 
-    def _generate_and_play(self, text: str):
-        try:
-            text_lower = text.lower().strip()
-            if text_lower in self._accent_cache:
-                text_with_accents = self._accent_cache[text_lower]
-            else:
+    # ------------------------------------------------------------- internals
+
+    def _speak_pipelined(self, sentences: list[str]):
+        """Пока играет одно предложение, готовится следующее."""
+        audio_q: queue.Queue = queue.Queue(maxsize=2)
+
+        def producer():
+            for sentence in sentences:
                 try:
-                    text_with_accents = self.accentizer.process_all(text_lower)
-                except Exception:
-                    text_with_accents = text_lower
-                self._accent_cache[text_lower] = text_with_accents
+                    audio_q.put(self._synthesize(self._accent(sentence)))
+                except Exception as e:
+                    print(f"[TTS] Ошибка генерации: {e}")
+            audio_q.put(None)
 
-            inputs = self.tokenizer(text_with_accents, return_tensors="np")
-            sid = np.array([self.speaker_id])
+        threading.Thread(target=producer, daemon=True).start()
+        while True:
+            audio = audio_q.get()
+            if audio is None:
+                break
+            audio_out.play(audio, SAMPLE_RATE)
 
-            output = self.model.run(
-                None,
-                {
-                    "input_ids": inputs["input_ids"],
-                    "attention_mask": inputs["attention_mask"],
-                    "sid": sid,
-                },
-            )[0]
+    def _accent(self, sentence: str) -> str:
+        key = sentence.lower().strip()
+        cached = self._accent_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            accented = self.accentizer.process_all(key)
+        except Exception:
+            accented = key
+        if len(self._accent_cache) >= ACCENT_CACHE_LIMIT:
+            self._accent_cache.pop(next(iter(self._accent_cache)))
+        self._accent_cache[key] = accented
+        return accented
 
-            audio_array = output[0]
-            if audio_array is None or len(audio_array) == 0:
-                print("[TTS] Пустой аудио-буфер, пропускаю воспроизведение")
-                return
-
-            audio_array = np.clip(audio_array, -1, 1)
-            audio_int16 = (audio_array * 32767).astype(np.int16)
-
-            sd.play(audio_int16, samplerate=self.sample_rate)
-            sd.wait()
-
-        except Exception as e:
-            print(f"Ошибка генерации речи UtrobinSpeaker: {e}")
-            import traceback
-            traceback.print_exc()
+    def _synthesize(self, accented_text: str) -> np.ndarray:
+        inputs = self.tokenizer(accented_text, return_tensors="np")
+        output = self.model.run(None, {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+            "sid": np.array([SPEAKER_ID]),
+        })[0]
+        audio = output[0]
+        if audio is None or len(audio) == 0:
+            raise ValueError("пустой аудио-буфер")
+        return np.clip(audio, -1.0, 1.0)

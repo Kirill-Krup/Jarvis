@@ -1,22 +1,30 @@
-torch
+# --- Голос и звук ---
 sounddevice
 soundfile
 vosk
-scikit-learn
-transformers
+onnxruntime
+numpy
+num2words
 ruaccent
+transformers      # нужен только токенизатор для озвучки (PyTorch не требуется)
+
+# --- Понимание команд ---
+scikit-learn
 thefuzz
+transliterate
+
+# --- Управление Windows ---
 pyautogui
 pycaw
-pystray
-monitorcontrol
-duckduckgo_search
-transliterate
-opencv-python
-ollama
-pillow
 comtypes
+monitorcontrol
+psutil
+
+# --- Интерфейс ---
+pystray
+pillow
+opencv-python
+
+# --- Сеть ---
 requests
-onnxruntime
-num2words
-duckduckgo_search
+ddgs

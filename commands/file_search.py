@@ -239,9 +239,11 @@ class FileSearch:
                 elif c_name.startswith(q_norm) or q_norm in c_name:
                     score = max(score, 88)
                 else:
-                    sort_ratio = fuzz.token_sort_ratio(q_norm, c_name)
-                    set_ratio = fuzz.token_set_ratio(q_norm, c_name)
-                    score = max(score, max(sort_ratio, set_ratio))
+                    score = max(score, fuzz.token_sort_ratio(q_norm, c_name))
+                    # «minecraft launcher» не должно совпадать с любым «Launcher»:
+                    # набор слов сравниваем, только если все слова запроса есть в названии
+                    if set(q_norm.split()) <= set(c_name.split()):
+                        score = max(score, fuzz.token_set_ratio(q_norm, c_name))
 
             # Бонус за ярлыки (.lnk, .url), так как они указывают на основное приложение
             if cand["ext"] in (".lnk", ".url"):
@@ -253,7 +255,9 @@ class FileSearch:
                 best_score = score
                 best_candidate = cand
 
-        if best_candidate and best_score >= 80:
+        # короткие запросы дают много случайных совпадений: для них порог выше
+        min_score = 80 if len(raw_query) >= 6 else 90
+        if best_candidate and best_score >= min_score:
             print(f"[FileSearch] find_app: query='{raw_query}' -> '{best_candidate['name']}' ({best_score}%)")
             print(f"[FileSearch] -> Путь приложения: {best_candidate['path']}")
 

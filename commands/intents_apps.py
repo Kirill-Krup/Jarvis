@@ -1,16 +1,8 @@
-import os
-import subprocess
 import ctypes
+import os
 import time
 
-
-def open_browser_url(url: str):
-    try:
-        cmd = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", f"Start-Process '{url}'"]
-        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
-    except Exception:
-        import webbrowser
-        webbrowser.open(url)
+from core.browser import open_url as open_browser_url
 
 
 def _send_key_combo(vk_modifier: int, vk_key: int):

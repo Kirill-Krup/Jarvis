@@ -1,12 +1,4 @@
-import webbrowser
-import subprocess
-
-def open_browser_url(url: str):
-    try:
-        cmd = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", f"Start-Process '{url}'"]
-        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
-    except Exception:
-        open_browser_url(url)
+from core.browser import open_url as open_browser_url
 
 
 KNOWN_SITES = {

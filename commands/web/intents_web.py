@@ -1,20 +1,11 @@
-import webbrowser
-import subprocess
-import os
 import re
 import urllib.parse
 import requests
 from ddgs import DDGS
 
 from config.setup_wizard import MUSIC_PLAYERS, MOVIE_SOURCES, ANIME_SOURCES, load_config
+from core.browser import open_url as open_browser_url
 
-
-def open_browser_url(url: str):
-    try:
-        cmd = ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", f"Start-Process '{url}'"]
-        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
-    except Exception:
-        webbrowser.open(url)
 
 
 # Ключевые слова для определения аниме
