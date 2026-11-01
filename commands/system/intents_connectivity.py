@@ -1,6 +1,5 @@
 """Управление Bluetooth, WiFi и другими системными переключателями."""
 import subprocess
-import os
 
 
 def _run_ps(command: str) -> bool:

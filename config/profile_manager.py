@@ -1,4 +1,4 @@
-from config.setup_wizard import load_config
+from config.store import load_config
 
 
 class ProfileManager:
@@ -15,7 +15,7 @@ class ProfileManager:
             return
         self._config = load_config()
         self._initialized = True
-        print(f"Профиль загружен: {self._config.get('name', 'Денис')} (город: {self.city})")
+        print(f"Профиль загружен: {self.name} (город: {self.city})")
 
     @property
     def current(self) -> dict:
@@ -64,6 +64,34 @@ class ProfileManager:
     @property
     def vosk_model(self) -> str:
         return str(self._config.get("vosk_model", "model_small"))
+
+    @property
+    def honorific_chance(self) -> float:
+        return max(0.0, min(1.0, float(self._config.get("honorific_chance", 0.25))))
+
+    @property
+    def voice_volume(self) -> int:
+        return int(self._config.get("voice_volume", 100))
+
+    @property
+    def notify_channel(self) -> str:
+        return str(self._config.get("notify_channel", "pc"))
+
+    @property
+    def telegram_token(self) -> str:
+        return str(self._config.get("telegram_token", "")).strip()
+
+    @property
+    def telegram_chat_id(self) -> str:
+        return str(self._config.get("telegram_chat_id", "")).strip()
+
+    @property
+    def projects_root(self) -> str:
+        return str(self._config.get("projects_root", "")).strip()
+
+    @property
+    def default_ide(self) -> str:
+        return str(self._config.get("default_ide", "idea"))
 
     def reload(self):
         self._config = load_config()

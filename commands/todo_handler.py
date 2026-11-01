@@ -4,12 +4,11 @@
   - Добавление дел
   - Озвучку списка
   - Удаление дел
-  - Напоминания по таймеру (через N минут)
+(напоминания по времени: commands/reminders.py)
 """
 import json
 import os
 import re
-import threading
 import datetime
 
 
@@ -136,127 +135,6 @@ def toggle_todo_by_index(idx: int) -> bool:
     return False
 
 
-# ─── Напоминания ───
-
-_active_reminders: list[threading.Timer] = []
-
-
-_WORD_NUMBERS = {
-    "один": 1, "одну": 1, "одна": 1,
-    "два": 2, "две": 2, "пару": 2, "парочку": 2,
-    "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9,
-    "десять": 10, "одиннадцать": 11, "двенадцать": 12, "пятнадцать": 15,
-    "двадцать": 20, "тридцать": 30, "сорок": 40, "сорок пять": 45, "пятьдесят": 50,
-}
-
-
-def set_reminder(text: str, speaker=None) -> str:
-    """Парсит 'напомни через N минут/часов ...' и ставит таймер.
-
-    Поддерживаемые форматы:
-      - напомни через минуту выпить таблетку
-      - напомни через пару минут проверить суп
-      - напомни через полчаса выключить духовку
-      - напомни через 30 минут выпить таблетку
-      - напомни через 1 час позвонить маме
-    """
-    clean_text = text.lower().strip()
-
-    # Особый случай: «полчаса»
-    if "полчаса" in clean_text or "пол часа" in clean_text:
-        amount = 30
-        unit = "мин"
-        task = re.sub(r".*?(?:полчаса|пол\s+часа)\s*", "", clean_text, count=1).strip()
-    else:
-        # Проверяем «через (число или слово) (минут/часов/секунд) (дело)»
-        # Либо «через минуту/часик (дело)» без указания числа
-        pattern = re.compile(
-            r"через\s+(?:(\d+|[а-яё]+)\s+)?(минут[аыу]?|минутку|мин|час(?:а|ов|ик)?|секунд[аыу]?|секундочку|сек)\s*(.*)",
-            re.IGNORECASE,
-        )
-        match = pattern.search(clean_text)
-
-        if not match:
-            # Если нет слова «через», но есть «напомни ...» без времени — сохраняем в To-Do
-            task = clean_text
-            for prefix in ("напомни мне", "напомни", "напоминание"):
-                if task.startswith(prefix):
-                    task = task[len(prefix):].strip()
-                    break
-            if task:
-                return add_todo(task)
-            return "Не понял, о чём и когда напомнить"
-
-        raw_num = match.group(1)
-        unit = match.group(2).lower()
-        task = match.group(3).strip()
-
-        if raw_num:
-            if raw_num.isdigit():
-                amount = int(raw_num)
-            else:
-                amount = _WORD_NUMBERS.get(raw_num.lower(), 1)
-        else:
-            # «через минуту», «через час», «через секунду» -> 1
-            amount = 1
-
-    if not task:
-        task = "Напоминание"
-
-    # Переводим в секунды
-    if unit.startswith("час"):
-        seconds = amount * 3600
-        unit_text = _pluralize_time(amount, "час", "часа", "часов")
-    elif unit.startswith("мин"):
-        seconds = amount * 60
-        unit_text = _pluralize_time(amount, "минуту", "минуты", "минут")
-    else:
-        seconds = amount
-        unit_text = _pluralize_time(amount, "секунду", "секунды", "секунд")
-
-    def _fire_reminder():
-        reminder_text = f"Напоминаю: {task}"
-        print(f"[REMINDER] {reminder_text}")
-        try:
-            from core.logging_utils import log_action
-            log_action(f"Сработало напоминание: {task}")
-        except Exception:
-            pass
-
-        # Голосовое воспроизведение
-        spk = speaker
-        if not spk:
-            try:
-                from core.speakers.speaker import Speaker
-                spk = Speaker()
-            except Exception:
-                pass
-
-        if spk:
-            try:
-                spk.speak(reminder_text)
-            except Exception as e:
-                print(f"[REMINDER] Ошибка озвучки: {e}")
-
-    timer = threading.Timer(seconds, _fire_reminder)
-    timer.daemon = True
-    timer.start()
-    _active_reminders.append(timer)
-
-    return f"Хорошо, напомню через {amount} {unit_text}: {task}"
-
-
-def _pluralize_time(n: int, one: str, few: str, many: str) -> str:
-    if 11 <= n % 100 <= 14:
-        return many
-    mod10 = n % 10
-    if mod10 == 1:
-        return one
-    if 2 <= mod10 <= 4:
-        return few
-    return many
-
-
 # ─── Обработчики для NLU actions ───
 
 def handle_todo_add(cmd, ctx):
@@ -312,6 +190,14 @@ def handle_todo_clear(cmd, ctx):
 
 
 def handle_todo_remind(cmd, ctx):
-    """Обработчик интента todo:remind."""
+    """Обработчик интента todo:remind (время разбирает commands.reminders)."""
+    from commands import reminders
     text = cmd.text_lower
-    return ctx.reply(set_reminder(text, ctx.speaker))
+    if reminders.parse_when(text) is None:
+        task = text
+        for prefix in ("напомни мне", "напомни"):
+            if task.startswith(prefix):
+                task = task[len(prefix):].strip()
+                break
+        return ctx.reply(add_todo(task) if task else "Не понял, о чём и когда напомнить")
+    return ctx.reply(reminders.set_reminder(text))

@@ -1,39 +1,45 @@
-import sys
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-import os
-import sys
+"""Слушатель микрофона: Silero VAD (ONNX) + распознавание Vosk."""
 import json
-import re
+import os
 import queue
+import re
+import sys
 import time
+
 import numpy as np
 import sounddevice as sd
-import torch
 import vosk
 from thefuzz import fuzz
-from vosk import Model, KaldiRecognizer
-from config.audio_device_manager import AudioDeviceManager
+from vosk import KaldiRecognizer, Model
 
-# Отключаем спам в логах Vosk/Kaldi для ускорения загрузки и консольного ввода-вывода
+from config.audio_device_manager import AudioDeviceManager
+from core.vad import BLOCK_SIZE, SAMPLE_RATE, SileroVAD
+
 vosk.SetLogLevel(-1)
+
+MAX_ALTERNATIVES = 3
+
+# Как Vosk часто «слышит» слово «Джарвис»
+WAKE_VARIANTS = {
+    "джарвис", "жарвис", "гарвис", "дарвис", "джервис", "чарвис", "джарвиса",
+    "жарвиса", "жарвес", "жарвесь", "джарис", "жарис", "варгас", "жабры",
+    "барвис", "карвис", "сервис", "jarvis",
+}
+WAKE_PREFIXES = ("джар", "жар", "джер")
+WAKE_FUZZY_SCORE = 60
+GREETING_RE = re.compile(r"^(эй|привет|слушай|скажи|пожалуйста)\s+", re.IGNORECASE)
 
 
 class Listener:
-    BLOCK_SIZE  = 512
-    SAMPLE_RATE = 16000
-
-    _vad_model_cache = None
-    _vosk_model_cache = None
+    _vad_cache = None
+    _vosk_cache = None
 
     def __init__(self, model_path="model", wake_word="джарвис",
                  auto_detect_device=True, custom_device=None):
         self.q = queue.Queue()
         self.wake_word = wake_word
+        self.last_alternatives: list[str] = []
+
         self.device_manager = AudioDeviceManager()
         if custom_device is not None:
             self.device_manager.set_custom_input_device(custom_device)
@@ -42,70 +48,39 @@ class Listener:
         self.device = self.device_manager.get_current_input_device()
         self.device_manager.print_devices_status()
 
-        # 1. Загрузка Silero VAD (локальный кэш без сетевых задержек)
-        if Listener._vad_model_cache is None:
-            print("Загрузка Silero VAD...")
-            hub_dir = torch.hub.get_dir()
-            local_vad_path = os.path.join(hub_dir, "snakers4_silero-vad_master")
-            if os.path.exists(local_vad_path):
-                vad_model, _ = torch.hub.load(
-                    local_vad_path,
-                    'silero_vad',
-                    source='local',
-                    verbose=False
-                )
-            else:
-                vad_model, _ = torch.hub.load(
-                    repo_or_dir='snakers4/silero-vad',
-                    model='silero_vad',
-                    force_reload=False,
-                    verbose=False,
-                    trust_repo=True
-                )
-            vad_model.eval()
-            Listener._vad_model_cache = vad_model
-            print("[OK] VAD готов!")
-        else:
-            print("[OK] VAD готов! (из кэша)")
+        if Listener._vad_cache is None:
+            Listener._vad_cache = SileroVAD()
+        self.vad = Listener._vad_cache
 
-        self.vad_model = Listener._vad_model_cache
-
-        # 2. Загрузка акустической модели Vosk (с кэшированием)
-        if Listener._vosk_model_cache is None:
-            print("Загрузка акустической модели Vosk...")
+        if Listener._vosk_cache is None:
             if not os.path.exists(model_path) and os.path.exists("model_small"):
                 model_path = "model_small"
             try:
-                Listener._vosk_model_cache = Model(model_path)
+                Listener._vosk_cache = Model(model_path)
             except Exception as e:
-                print(f"❌ Ошибка загрузки модели Vosk: {e}")
-                print("Убедитесь, что папка 'model' или 'model_small' находится в корне проекта!")
+                print(f"[ERROR] Не удалось загрузить модель Vosk: {e}")
+                print("Папка 'model' или 'model_small' должна лежать в корне проекта.")
                 sys.exit(1)
 
-        self.model = Listener._vosk_model_cache
-        self.recognizer = KaldiRecognizer(self.model, self.SAMPLE_RATE)
-        self.wake_recognizer = KaldiRecognizer(self.model, self.SAMPLE_RATE)
-        self.wake_recognizer.SetGrammar(
-            json.dumps(
-                [self.wake_word, "гарвис", "дарвис", "жарвис",
-                 "просыпайся", "проснись", "[unk]"],
-                ensure_ascii=False
-            )
-        )
+        self.recognizer = KaldiRecognizer(Listener._vosk_cache, SAMPLE_RATE)
+        try:
+            self.recognizer.SetMaxAlternatives(MAX_ALTERNATIVES)
+        except Exception:
+            pass
 
-        # 3. Настройки чувствительности VAD и усиления из профиля
         from config.profile_manager import ProfileManager
         self.profile = ProfileManager()
-        self.vad_threshold = getattr(self.profile, "vad_threshold", 0.5)
-        self.silence_ms = getattr(self.profile, "silence_ms", 400)
-        self.mic_gain = getattr(self.profile, "mic_gain", 1.0)
+        self.vad_threshold = self.profile.vad_threshold
+        self.silence_ms = self.profile.silence_ms
+        self.mic_gain = self.profile.mic_gain
 
-        # 4. Постоянный поток аудио
         self.stream = None
         self._start_stream()
+        print(f"[OK] Listener: VAD thresh={self.vad_threshold}, "
+              f"pause={self.silence_ms}ms, gain={self.mic_gain}x, "
+              f"микрофон: {sd.query_devices(self.device)['name']}")
 
-        print(f"[OK] Listener готов! ({self.SAMPLE_RATE}Hz) VAD: thresh={self.vad_threshold}, pause={self.silence_ms}ms, gain={self.mic_gain}x")
-        print(f"[MIC] Микрофон: {sd.query_devices(self.device)['name']}")
+    # ------------------------------------------------------------- поток
 
     def _start_stream(self):
         if self.stream is not None:
@@ -115,22 +90,17 @@ class Listener:
             except Exception:
                 pass
         self.stream = sd.RawInputStream(
-            samplerate=self.SAMPLE_RATE,
-            blocksize=self.BLOCK_SIZE,
-            device=self.device,
-            dtype='int16',
-            channels=1,
-            callback=self._callback
-        )
+            samplerate=SAMPLE_RATE, blocksize=BLOCK_SIZE, device=self.device,
+            dtype="int16", channels=1, callback=self._callback)
         self.stream.start()
 
-    def _callback(self, indata, frames, time, status):
+    def _callback(self, indata, frames, time_info, status):
         if status:
             print(status, file=sys.stderr)
         self.q.put(bytes(indata))
 
     def _drain_queue(self):
-        while not self.q.empty():
+        while True:
             try:
                 self.q.get_nowait()
             except queue.Empty:
@@ -143,81 +113,76 @@ class Listener:
             self.silence_ms = int(silence_ms)
         if mic_gain is not None:
             self.mic_gain = float(mic_gain)
-        print(f"[VAD CONFIG] thresh={self.vad_threshold}, pause={self.silence_ms}ms, gain={self.mic_gain}x")
+
+    def switch_device(self, device_index: int) -> bool:
+        if self.device_manager.set_custom_input_device(device_index):
+            self.device = device_index
+            self._start_stream()
+            return True
+        return False
+
+    # --------------------------------------------------------- калибровка
 
     def calibrate(self, duration_sec: float = 2.5) -> dict:
-        """Замеряет уровень фонового шума в помещении и калибрует VAD порог."""
-        print(f"[CALIBRATE] Замер шума {duration_sec}с...")
+        """Замеряет фоновый шум и подбирает порог VAD и усиление."""
         samples = []
         self._drain_queue()
-        start_time = time.time()
-        while time.time() - start_time < duration_sec:
+        end = time.time() + duration_sec
+        while time.time() < end:
             try:
                 data = self.q.get(timeout=0.2)
-                arr = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-                samples.append(arr)
             except queue.Empty:
-                pass
+                continue
+            samples.append(np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0)
         if not samples:
             return {"threshold": 0.5, "gain": 1.0, "status": "no_data"}
 
-        all_audio = np.concatenate(samples)
-        rms = float(np.sqrt(np.mean(all_audio ** 2)))
-        peak = float(np.max(np.abs(all_audio)))
+        audio = np.concatenate(samples)
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        peak = float(np.max(np.abs(audio)))
 
-        # Автоматическая настройка порога VAD и усиления
         if rms < 0.012:
-            rec_thresh = 0.45
-            rec_gain = 1.3 if peak < 0.2 else 1.0
+            threshold, gain = 0.45, (1.3 if peak < 0.2 else 1.0)
         elif rms < 0.04:
-            rec_thresh = 0.50
-            rec_gain = 1.0
+            threshold, gain = 0.50, 1.0
         else:
-            rec_thresh = 0.60
-            rec_gain = 0.9
+            threshold, gain = 0.60, 0.9
 
-        self.vad_threshold = rec_thresh
-        self.mic_gain = rec_gain
-
+        self.vad_threshold, self.mic_gain = threshold, gain
         try:
             from config.setup_wizard import load_config, save_config
             cfg = load_config()
-            cfg["vad_threshold"] = rec_thresh
-            cfg["mic_gain"] = rec_gain
+            cfg["vad_threshold"], cfg["mic_gain"] = threshold, gain
             save_config(cfg)
             self.profile.reload()
         except Exception:
             pass
+        return {"rms": round(rms, 4), "peak": round(peak, 4),
+                "threshold": threshold, "gain": gain, "status": "ok"}
 
-        return {
-            "rms": round(rms, 4),
-            "peak": round(peak, 4),
-            "threshold": rec_thresh,
-            "gain": rec_gain,
-            "status": "ok"
-        }
+    # --------------------------------------------------------- распознавание
 
-    def _vad_listen(self, recognizer: KaldiRecognizer,
-                    silence_ms: int | None = None,
-                    threshold: float | None = None,
-                    timeout_sec: float | None = None) -> str:
+    def _final_texts(self) -> list[str]:
+        """Варианты распознанной фразы, лучший первым."""
+        result = json.loads(self.recognizer.FinalResult())
+        if "alternatives" in result:
+            texts = [a.get("text", "").strip() for a in result["alternatives"]]
+        else:
+            texts = [result.get("text", "").strip()]
+        return [t for t in texts if t]
 
-        effective_silence = silence_ms if silence_ms is not None else self.silence_ms
-        effective_thresh = threshold if threshold is not None else self.vad_threshold
+    def _vad_listen(self, timeout_sec: float | None = None) -> str:
+        block_ms = BLOCK_SIZE / SAMPLE_RATE * 1000
+        silence_needed = int(self.silence_ms / block_ms)
+        max_wait = int(timeout_sec * SAMPLE_RATE / BLOCK_SIZE) if timeout_sec else None
 
-        silence_needed = int(effective_silence / ((self.BLOCK_SIZE / self.SAMPLE_RATE) * 1000))
-        silence_frames = 0
-        speaking       = False
-        has_audio      = False
+        silence_frames = wait_frames = 0
+        speaking = False
 
-        recognizer.Reset()
+        self.recognizer.Reset()
+        self.vad.reset()
         self._drain_queue()
-
-        # Таймаут на ожидание начала речи
-        max_wait_frames = None
-        if timeout_sec is not None and timeout_sec > 0:
-            max_wait_frames = int(timeout_sec * (self.SAMPLE_RATE / self.BLOCK_SIZE))
-        wait_frames = 0
+        self.last_alternatives = []
 
         while True:
             try:
@@ -227,119 +192,74 @@ class Listener:
                     break
                 continue
 
-            raw_np = np.frombuffer(data, dtype=np.int16).copy()
+            samples = np.frombuffer(data, dtype=np.int16)
             if self.mic_gain != 1.0:
-                boosted = np.clip(raw_np.astype(np.float32) * self.mic_gain, -32768, 32767).astype(np.int16)
-                data = boosted.tobytes()
-                chunk = torch.from_numpy(boosted).float() / 32768.0
-            else:
-                chunk = torch.from_numpy(raw_np).float() / 32768.0
-
-            if chunk.shape[0] != self.BLOCK_SIZE:
+                samples = np.clip(samples.astype(np.float32) * self.mic_gain,
+                                  -32768, 32767).astype(np.int16)
+                data = samples.tobytes()
+            if samples.shape[0] != BLOCK_SIZE:
                 continue
 
-            with torch.no_grad():
-                speech_prob = self.vad_model(chunk, self.SAMPLE_RATE).item()
-
-            if speech_prob > effective_thresh:
-                if not speaking:
-                    print("[VAD]  Говорите...", end="\r", flush=True)
-                speaking       = True
-                has_audio      = True
+            if self.vad(samples) > self.vad_threshold:
+                speaking = True
                 silence_frames = 0
-                recognizer.AcceptWaveform(data)
+                self.recognizer.AcceptWaveform(data)
             elif speaking:
                 silence_frames += 1
-                recognizer.AcceptWaveform(data)
+                self.recognizer.AcceptWaveform(data)
                 if silence_frames >= silence_needed:
                     break
-            else:
-                # Если речь еще не началась, проверяем лимит времени
-                if max_wait_frames is not None:
-                    wait_frames += 1
-                    if wait_frames >= max_wait_frames:
-                        break
+            elif max_wait is not None:
+                wait_frames += 1
+                if wait_frames >= max_wait:
+                    break
 
-        if not has_audio:
+        if not speaking:
             return ""
-
-        result = json.loads(recognizer.FinalResult())
-        return result.get("text", "").strip()
+        texts = self._final_texts()
+        self.last_alternatives = texts
+        return texts[0] if texts else ""
 
     def listen_wake_and_command(self) -> tuple[str, str, str] | None:
-        """
-        Быстрое нечёткое (fuzzy) распознавание wake-word и команды в одной фразе.
-        Возвращает: (trigger, command_text, raw_heard_text) или None.
-        """
-        text = self._vad_listen(
-            recognizer=self.recognizer,
-            silence_ms=self.silence_ms,
-            threshold=self.vad_threshold
-        )
-
+        """Слушает фразу целиком. Возвращает (trigger, команда, сырой текст)
+        или None, если слова «Джарвис» не было."""
+        text = self._vad_listen()
         if not text:
             return None
 
-        # Проверка на просыпание
         if any(w in text for w in ("просыпайся", "проснись")):
             return ("wakeup", "", text)
 
-        wake_exact = {
-            self.wake_word, "джарвис", "жарвис", "гарвис", "дарвис", "джервис",
-            "чарвис", "джарвиса", "жарвиса", "жарвес", "жарвесь", "джарис", "жарис",
-            "варгас", "жабры", "барвис", "карвис", "сервис", "jarvis"
-        }
-
         words = text.split()
         wake_idx = -1
-
-        for idx, w in enumerate(words):
-            w_clean = re.sub(r'[^\w]', '', w.lower())
-            score = max(fuzz.ratio(w_clean, "джарвис"), fuzz.ratio(w_clean, "жарвис"))
-            if w_clean in wake_exact or score >= 60 or w_clean.startswith(("джар", "жар", "джер")):
+        for idx, word in enumerate(words):
+            w = re.sub(r"[^\w]", "", word.lower())
+            score = max(fuzz.ratio(w, "джарвис"), fuzz.ratio(w, "жарвис"))
+            if (w in WAKE_VARIANTS or w == self.wake_word
+                    or score >= WAKE_FUZZY_SCORE or w.startswith(WAKE_PREFIXES)):
                 wake_idx = idx
                 break
-
         if wake_idx == -1:
             return None
 
-        # Команда — всё, что сказано ПОСЛЕ слова-триггера (отсекая предваряющий шум)
-        raw_command = " ".join(words[wake_idx + 1:]).strip()
-        command = re.sub(r"^(эй|привет|слушай|скажи|пожалуйста)\s+", "", raw_command, flags=re.IGNORECASE).strip()
-        print(f"[WAKE] Wake detected! Полная фраза: '{text}' -> Команда: '{command}'")
+        command = GREETING_RE.sub("", " ".join(words[wake_idx + 1:]).strip()).strip()
+        # альтернативы Vosk тоже обрезаем до команды: пригодятся для исправления
+        self.last_alternatives = [self._strip_wake(t) for t in self.last_alternatives]
         return ("wake", command, text)
+
+    def _strip_wake(self, text: str) -> str:
+        words = text.split()
+        for idx, word in enumerate(words):
+            w = re.sub(r"[^\w]", "", word.lower())
+            if (w in WAKE_VARIANTS or fuzz.ratio(w, "джарвис") >= WAKE_FUZZY_SCORE
+                    or w.startswith(WAKE_PREFIXES)):
+                return GREETING_RE.sub("", " ".join(words[idx + 1:])).strip()
+        return text
 
     def listen_wake(self) -> str | None:
         res = self.listen_wake_and_command()
-        if res:
-            return res[0]
-        return None
+        return res[0] if res else None
 
     def listen(self, timeout_sec: float | None = None) -> str | None:
-        """Слушает речь с микрофона.
-        
-        Если задан timeout_sec и пользователь не начал говорить за это время,
-        немедленно возвращает None.
-        """
-        if timeout_sec:
-            print(f"\n[MIC] Слушаю команду (таймаут {timeout_sec:.1f}с)...")
-        else:
-            print("\n[MIC] Слушаю команду...")
-
-        text = self._vad_listen(
-            recognizer=self.recognizer,
-            silence_ms=self.silence_ms,
-            threshold=self.vad_threshold,
-            timeout_sec=timeout_sec
-        )
-        if text:
-            print(f"\n[ФИНАЛ] Джарвис услышал: '{text}'")
-        return text or None
-
-    def switch_device(self, device_index: int) -> bool:
-        if self.device_manager.set_custom_input_device(device_index):
-            self.device = device_index
-            self._start_stream()
-            print(f"[SWITCH] Переключено: {sd.query_devices(self.device)['name']}")
-            return True
-        return False
+        """Слушает речь. Если за timeout_sec никто не заговорил — None."""
+        return self._vad_listen(timeout_sec=timeout_sec) or None

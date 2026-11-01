@@ -1,113 +1,48 @@
+"""Проигрывание заранее записанных фраз Джарвиса (если файлы есть в
+voice_samples/jarvis_ru/). Если файла нет, Speaker озвучит фразу через TTS."""
 import os
 import random
-import sounddevice as sd
+
 import soundfile as sf
+
+from core import audio_out
+
+GROUPS = {
+    "greeting": ["Джарвис - приветствие.wav", "Мы подключены и готовы.wav"],
+    "second_display": ["Первый экран деактивирован.mp3"],
+    "first_display": ["Второй экран деактивирован.mp3"],
+    "extend_display": ["Экраны расширены.mp3"],
+    "duplicate_display": ["Дублирование экранов активировано.mp3"],
+    "affirmation": ["К вашим услугам сэр.wav"],
+    "loading": ["Загружаю сэр.wav", "Как пожелаете .wav", "Запрос выполнен сэр .wav"],
+    "reboot": ["Я перезагрузился сэр.wav"],
+    "shutdown": ["Отключаю питание.wav"],
+    "layout_scan": ["Импортирую установки, начинаю калибровку виртуальной среды.wav"],
+}
 
 
 class JarvisVoicePlayer:
     def __init__(self, base_dir: str = "voice_samples/jarvis_ru/"):
         self.base_dir = base_dir
 
-        self._greeting_group = [
-            "Джарвис - приветствие.wav",
-            "Мы подключены и готовы.wav"
-        ]
-
-        self._second_display = [
-            "Первый экран деактивирован.mp3",
-        ]
-
-        self._first_display = [
-            "Второй экран деактивирован.mp3",
-        ]
-
-        self._extend_display = [
-            "Экраны расширены.mp3",
-        ]
-
-        self._duplicate_display = [
-            "Дублирование экранов активировано.mp3",
-        ]
-
-        self._affirmation_group = [
-            "К вашим услугам сэр.wav"
-        ]
-
-        self._loading_group = [
-            "Загружаю сэр.wav",
-            "Как пожелаете .wav",
-            "Запрос выполнен сэр .wav"
-        ]
-        
-        self._diagnostics_group = [
-            "Начинаю диагностику системы.wav",
-        ]
-
-        self.diagnostics_done = [
-            "Проверка завершена.wav"
-        ]
-
-        self._reboot_group = [
-            "Я перезагрузился сэр.wav"
-        ]
-        
-        self._shutdown_group = [
-            "Отключаю питание.wav"
-        ]
-
-    def _play_wav(self, path: str) -> bool:
+    def _play(self, group: str) -> bool:
+        path = os.path.join(self.base_dir, random.choice(GROUPS[group]))
         if not os.path.exists(path):
             return False
         try:
-            data, samplerate = sf.read(path, dtype="float32")
-            sd.play(data, samplerate)
-            sd.wait()
+            data, rate = sf.read(path, dtype="float32")
+            audio_out.play(data, rate)
             return True
         except Exception:
             return False
 
-    def _play_random(self, group: list) -> bool:
-        if not group:
-            return False
-        filename = random.choice(group)
-        full_path = os.path.join(self.base_dir, filename)
-        return self._play_wav(full_path)
-
-    def play_greeting(self) -> bool:
-        return self._play_random(self._greeting_group)
-
-    def play_affirmation(self) -> bool:
-        return self._play_random(self._affirmation_group)
-
-    def play_loading(self) -> bool:
-        return self._play_random(self._loading_group)
-
-    def play_diagnostics(self) -> bool:
-        return self._play_random(self._diagnostics_group)
-
-    def play_reboot(self) -> bool:
-        return self._play_random(self._reboot_group)
-
-    def play_shutdown(self) -> bool:
-        return self._play_random(self._shutdown_group)
-
-    def play_diagnostics_done(self) -> bool:
-        return self._play_random(self.diagnostics_done)
-
-    def play_second_display_active(self) -> bool:
-        return self._play_random(self._second_display)
-
-    def play_first_display_active(self) -> bool:
-        return self._play_random(self._first_display)
-
-    def play_duplicate_display(self) -> bool:
-        return self._play_random(self._duplicate_display)
-
-    def play_extend_display(self) -> bool:
-        return self._play_random(self._extend_display)
-
-    def play_layout_scan_complete(self) -> bool:
-        return self._play_wav(os.path.join(self.base_dir, "Импортирую установки, начинаю калибровку виртуальной среды.wav"))
-
-    def play_low_batery(self) -> bool:
-        return self._play_wav(os.path.join(self.base_dir, "Включилось аварийное резервное питание.wav"))
+    def play_greeting(self): return self._play("greeting")
+    def play_affirmation(self): return self._play("affirmation")
+    def play_loading(self): return self._play("loading")
+    def play_reboot(self): return self._play("reboot")
+    def play_shutdown(self): return self._play("shutdown")
+    def play_second_display_active(self): return self._play("second_display")
+    def play_first_display_active(self): return self._play("first_display")
+    def play_duplicate_display(self): return self._play("duplicate_display")
+    def play_extend_display(self): return self._play("extend_display")
+    def play_layout_scan_complete(self): return self._play("layout_scan")

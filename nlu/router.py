@@ -65,10 +65,6 @@ class IntentRouter:
         return self.ctx.reply(f"Не удалось найти {target_display}")
 
     def _close_app(self, cmd, result):
-        honorific = self.ctx.profile.honorific
-        app_name = result.target_ru or result.target_en or cmd.text
-        for prefix in ("закрой", "закрыть", "выключи", "выруби"):
-            app_name = app_name.replace(prefix, "").strip()
         return intents_apps.handle_close(cmd, self.ctx)
 
     def _open_folder(self, cmd, result):
