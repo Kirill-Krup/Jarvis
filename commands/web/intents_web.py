@@ -274,30 +274,21 @@ def handle_music(cmd, ctx):
 
 
 def handle_play_song(cmd, ctx):
-    """Открывает поиск конкретной песни в выбранном сервисе."""
+    """Открывает воспроизведение конкретной песни."""
     text = getattr(cmd, "text_lower", str(cmd).lower())
     song_name = re.sub(r'\b(включи|поставь|вруби|хочу|послушать|песню|песня|трек|музыку|сыграй|композицию)\b', '', text)
     song_name = re.sub(r'[^\w\s]', '', song_name).strip()
 
     if not song_name:
+        if hasattr(ctx, "set_pending"):
+            ctx.set_pending("play_song")
         return ctx.reply("Какую песню включить?")
 
-    base_url, player_name = _get_music_url()
-    encoded_song = urllib.parse.quote_plus(song_name)
-
-    if "youtube.com" in base_url or "music.youtube.com" in base_url:
-        url = f"https://music.youtube.com/search?q={encoded_song}"
-    elif "spotify.com" in base_url:
-        url = f"https://open.spotify.com/search/{encoded_song}"
-    elif "yandex.ru" in base_url:
-        url = f"https://music.yandex.ru/search?text={encoded_song}"
-    elif "vk.com" in base_url:
-        url = f"https://vk.com/audio?q={encoded_song}"
-    else:
-        url = f"https://music.youtube.com/search?q={encoded_song}"
-
-    open_browser_url(url)
-    return ctx.reply(f"Включаю «{song_name}» в {player_name}")
+    from commands.skills.music import play_query
+    started, player_name = play_query(song_name, ctx.profile)
+    if started:
+        return ctx.reply(f"Включаю «{song_name}»")
+    return ctx.reply(f"Открыл «{song_name}» в {player_name}")
 
 
 def handle_weather(cmd, ctx):

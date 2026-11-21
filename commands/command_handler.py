@@ -48,10 +48,42 @@ GREETING_REPLIES = [
     "О, {name}! А я уже начал скучать по вашим командам.",
 ]
 
+CONVERSATION_START_PHRASES = {
+    "режим разговора", "включи режим разговора", "активируй режим разговора",
+    "перейди в режим разговора", "запусти режим разговора", "давай поговорим",
+    "поговори со мной", "режим диалога", "включи диалог", "разговор", "поболтаем"
+}
+
+CONVERSATION_STOP_PHRASES = {
+    "завершить разговор", "заверши разговор", "выключи режим разговора",
+    "выйди из режима разговора", "останови режим разговора", "стоп разговор",
+    "хватит разговаривать", "хватит болтать", "закончить разговор",
+    "выход из режима разговора", "закрой разговор", "отключи режим разговора",
+    "прекрати разговор", "хватит"
+}
+
+ADMIN_LOCK_PHRASES = {
+    "гостевой режим", "включи гостевой режим", "заблокируй команды",
+    "ограничь доступ", "режим гостей", "гость"
+}
+
+ADMIN_UNLOCK_PHRASES = {
+    "режим администратора", "авторизация администратора", "я администратор",
+    "сними ограничения", "полный доступ", "разблокируй команды"
+}
+
+RESTRICTED_GUEST_COMMANDS = (
+    "завершить работу", "выключись", "выключи компьютер", "перезагрузи компьютер",
+    "перезагрузка", "заблокируй компьютер", "диспетчер задач", "панель управления",
+    "настройки", "закрой программу", "закрой приложение", "закрой папку",
+    "просканируй диск", "полная проверка", "быстрая проверка", "очисти список дел",
+    "открой диск d", "открой диск e", "открой терминал", "очисти корзину"
+)
+
 
 class CommandContext:
     def __init__(self, speaker, file_search, system_handler,
-                 app_launcher, web_handler, volume_control, profile):
+                 app_launcher, web_handler, volume_control, profile, handler=None):
         self.speaker = speaker
         self.file_search = file_search
         self.system_handler = system_handler
@@ -59,6 +91,11 @@ class CommandContext:
         self.web_handler = web_handler
         self.volume_control = volume_control
         self.profile = profile
+        self.handler = handler
+
+    def set_pending(self, action_type: str, data: dict = None):
+        if self.handler:
+            self.handler.set_pending(action_type, data)
 
     def speak(self, text: str) -> str:
         self.speaker.speak(text)
@@ -90,6 +127,9 @@ class CommandHandler:
         self.intent_service = IntentService()
         self.fallback = FallbackPolicy()
         self.last_was_chat = False   # последний ответ был разговором (продлеваем диалог)
+        self.conversation_mode = False
+        self.guest_mode = False
+        self._pending_action = None
 
         self.ctx = CommandContext(
             speaker=speaker,
@@ -99,11 +139,37 @@ class CommandHandler:
             web_handler=self.web_handler,
             volume_control=self.volume_control,
             profile=self.profile,
+            handler=self,
         )
         self.router = IntentRouter(self.ctx)
         reminders.start_scheduler(speaker)
 
         self.command_map = [
+            # Режим разговора
+            ("режим разговора", self._cmd_start_conversation),
+            ("включи режим разговора", self._cmd_start_conversation),
+            ("активируй режим разговора", self._cmd_start_conversation),
+            ("давай поговорим", self._cmd_start_conversation),
+            ("завершить разговор", self._cmd_stop_conversation),
+            ("заверши разговор", self._cmd_stop_conversation),
+            ("выключи режим разговора", self._cmd_stop_conversation),
+            ("выйди из режима разговора", self._cmd_stop_conversation),
+            ("стоп разговор", self._cmd_stop_conversation),
+            ("хватит болтать", self._cmd_stop_conversation),
+
+            # Безопасность и администрирование
+            ("гостевой режим", self._cmd_enable_guest),
+            ("включи гостевой режим", self._cmd_enable_guest),
+            ("режим администратора", self._cmd_enable_admin),
+            ("авторизация администратора", self._cmd_enable_admin),
+
+            # Музыка: прямое включение конкретной песни
+            ("включи песню", intents_web.handle_play_song),
+            ("поставь песню", intents_web.handle_play_song),
+            ("сыграй песню", intents_web.handle_play_song),
+            ("включи трек", intents_web.handle_play_song),
+            ("поставь трек", intents_web.handle_play_song),
+
             # Поиск / информация
             ("найди информацию по запросу", intents_web.handle_info_search),
             ("найди информацию", intents_web.handle_info_search),
@@ -284,6 +350,52 @@ class CommandHandler:
 
         print("CommandHandler готов [OK]")
 
+    @property
+    def has_pending(self) -> bool:
+        return self._pending_action is not None
+
+    def set_pending(self, action_type: str, data: dict = None):
+        self._pending_action = {"type": action_type, "data": data or {}}
+
+    def clear_pending(self):
+        self._pending_action = None
+
+    def _cmd_start_conversation(self, cmd, ctx):
+        self.conversation_mode = True
+        self.last_was_chat = True
+        return ctx.reply("Режим разговора активирован. Я вас внимательно слушаю")
+
+    def _cmd_stop_conversation(self, cmd, ctx):
+        self.conversation_mode = False
+        self.last_was_chat = False
+        return ctx.reply("Режим разговора завершён. Возвращаюсь к стандартным командам")
+
+    def _cmd_enable_guest(self, cmd, ctx):
+        self.guest_mode = True
+        return ctx.reply("Гостевой режим активирован. Доступ к системным функциям ограничен")
+
+    def _cmd_enable_admin(self, cmd, ctx):
+        self.guest_mode = False
+        return ctx.reply("Авторизация администратора подтверждена. Полный доступ открыт")
+
+    def _handle_pending(self, clean_text: str, pending: dict):
+        p_type = pending.get("type")
+        if p_type == "play_song":
+            from commands.skills.music import play_song
+            return play_song(Command(clean_text), self.ctx)
+        if p_type == "open_app":
+            return self.app_launcher.launch(clean_text, self.profile.honorific)
+        if p_type == "open_folder":
+            path = self.file_search.find_folder(clean_text)
+            if path:
+                import os
+                os.startfile(path)
+                return self.ctx.reply(f"Открываю папку {clean_text}")
+            return self.ctx.reply(f"Папка {clean_text} не найдена")
+        if p_type == "todo_add":
+            return todo_handler.handle_todo_add(Command(f"добавь {clean_text}"), self.ctx)
+        return None
+
     # ------------------------------------------------------------ разбор команды
 
     def handle(self, text: str, alternatives=()) -> str:
@@ -301,9 +413,49 @@ class CommandHandler:
         if profanity_reply:
             return self.ctx.reply(profanity_reply)
 
+        phrase = self._clean(ru_numbers_to_digits(text.lower()))
+        phrase = re.sub(r"^(?:джарвис|жарвис|дарвис|гарвис|jarvis)\s+", "", phrase).strip()
+
+        # 1. Проверяем ожидающий вопрос (например, "Какую песню включить?")
+        if self._pending_action:
+            pending = self._pending_action
+            self._pending_action = None
+            if phrase in ("отмена", "отменить", "забудь", "стоп", "не надо", "назад"):
+                return self.ctx.reply("Отменено")
+            reply = self._handle_pending(phrase, pending)
+            if reply is not None:
+                return reply
+
+        # 2. Переключение режима разговора
+        if any(phrase == p or phrase.startswith(p + " ") for p in CONVERSATION_START_PHRASES):
+            return self._cmd_start_conversation(Command(phrase), self.ctx)
+        if any(phrase == p or phrase.startswith(p + " ") for p in CONVERSATION_STOP_PHRASES):
+            return self._cmd_stop_conversation(Command(phrase), self.ctx)
+
+        # 3. Переключение режима администратора / гостя
+        if any(phrase == p or phrase.startswith(p + " ") for p in ADMIN_LOCK_PHRASES):
+            return self._cmd_enable_guest(Command(phrase), self.ctx)
+        if any(phrase == p or phrase.startswith(p + " ") for p in ADMIN_UNLOCK_PHRASES):
+            return self._cmd_enable_admin(Command(phrase), self.ctx)
+
+        # 4. Если активен режим разговора:
+        if self.conversation_mode:
+            quick_volume = ("тише", "громче", "выключи звук", "включи звук", "пауза", "продолжи")
+            if not any(phrase.startswith(v) for v in quick_volume):
+                self.last_was_chat = True
+                if self.ollama.is_available():
+                    reply = self.ollama.chat(text)
+                    if reply:
+                        return reply
+                return self.ctx.reply("Сервер Ollama сейчас недоступен для диалога")
+
+        # 5. Проверка прав в гостевом режиме
+        if self.guest_mode:
+            if any(phrase.startswith(rc) for rc in RESTRICTED_GUEST_COMMANDS):
+                return self.ctx.reply("Данная команда заблокирована в гостевом режиме. Требуются права администратора")
+
         # Навыки с однозначной формулировкой («включи песню А и Б», «выбери между…»)
         # разбирают фразу целиком, чтобы не разрезать её по союзу «и»
-        phrase = self._clean(ru_numbers_to_digits(text.lower()))
         found = find_skill(self._fix(phrase, alternatives))
         if found and found.exclusive:
             reply = self._run_skill(found, self._fix(phrase, alternatives))
@@ -490,7 +642,7 @@ class CommandHandler:
             return self.ctx.reply("Не получилось выполнить команду")
 
     def _chat(self, cmd, result) -> str:
-        """Разговор: языковая модель, а без неё — живые заготовки."""
+        """Разговор: языковая модель (только в режиме разговора), а иначе — заготовки."""
         search_words = ("загугли", "прогугли", "погугли", "поищи", "найди в интернете",
                         "найди в сети", "поиск в гугле", "что такое", "кто такой")
         if any(w in cmd.text_lower for w in search_words):
@@ -500,6 +652,15 @@ class CommandHandler:
             query = self._clean(query)
             open_url(f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}")
             return self.ctx.reply(f"Ищу информацию по запросу «{query}» в браузере")
+
+        # Если режим разговора НЕ активирован — запросы в LLM не отправляются!
+        if not self.conversation_mode:
+            if result.chat_reply:
+                return result.chat_reply
+            talk = small_talk.reply(cmd.text_lower)
+            if talk:
+                return self.ctx.reply(talk)
+            return self.ctx.reply("Команда не распознана. Чтобы свободно пообщаться со мной, скажите: «режим разговора»")
 
         self.last_was_chat = True
         if result.chat_reply:

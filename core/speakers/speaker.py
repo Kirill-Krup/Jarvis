@@ -2,6 +2,7 @@
 from config.profile_manager import ProfileManager
 from core.honorific import soften
 from core.jarvice_voice_player import JarvisVoicePlayer
+from core.speakers.number_verbalizer import verbalize_numbers
 from core.speakers.utrobin_speaker import UtrobinSpeaker
 
 
@@ -18,10 +19,32 @@ class Speaker:
         if self._initialized:
             return
         self.profile = ProfileManager()
-        self.engine = UtrobinSpeaker()
+        self._vc = None
+        voice = getattr(self.profile, "voice", "en-US-BrianMultilingualNeural")
+        if voice == "utrobin":
+            self.engine = UtrobinSpeaker()
+        else:
+            try:
+                from core.speakers.edge_speaker import EdgeSpeaker
+                # Если в конфиге стоял английский en-GB-RyanNeural или пусто, используем лучший голос Brian
+                chosen_voice = "en-US-BrianMultilingualNeural" if ("Ryan" in str(voice) or not voice) else str(voice)
+                self.engine = EdgeSpeaker(voice=chosen_voice)
+            except Exception as e:
+                print(f"[SPEAKER] Ошибка EdgeSpeaker ({e}), переключаюсь на Utrobin")
+                self.engine = UtrobinSpeaker()
+
         self.voice_player = JarvisVoicePlayer()
         self._initialized = True
         print("Speaker готов [OK]")
+
+    def _get_vc(self):
+        if self._vc is None:
+            try:
+                from commands.system.volume_control import VolumeControl
+                self._vc = VolumeControl()
+            except Exception:
+                self._vc = False
+        return self._vc if self._vc else None
 
     def speak(self, text: str, soften_honorific: bool = True):
         """Озвучивает текст. Обращение («сэр») оставляется лишь иногда;
@@ -31,7 +54,28 @@ class Speaker:
         text = str(text)
         if soften_honorific:
             text = soften(text)
-        self.engine.speak(text)
+        text = verbalize_numbers(text)
+
+        # Автоприглушение фонового звука (Audio Ducking)
+        prev_vol = None
+        vc = self._get_vc()
+        if vc:
+            try:
+                current_vol = vc.get_volume()
+                if current_vol > 20:
+                    prev_vol = current_vol
+                    vc.set_volume(max(10, int(current_vol * 0.35)))
+            except Exception:
+                prev_vol = None
+
+        try:
+            self.engine.speak(text)
+        finally:
+            if prev_vol is not None and vc:
+                try:
+                    vc.set_volume(prev_vol)
+                except Exception:
+                    pass
 
     def _play_or_say(self, played: bool, fallback: str):
         if not played:
@@ -62,15 +106,4 @@ class Speaker:
 
     def speak_first_display_active(self):
         self._play_or_say(self.voice_player.play_first_display_active(),
-                          "Второй экран деактивирован")
-
-    def speak_duplicate_display(self):
-        self._play_or_say(self.voice_player.play_duplicate_display(),
-                          "Дублирование экранов активировано")
-
-    def speak_extend_display(self):
-        self._play_or_say(self.voice_player.play_extend_display(), "Экраны расширены")
-
-    def speak_import(self):
-        self._play_or_say(self.voice_player.play_layout_scan_complete(),
-                          "Импортирую настройки, системы в норме")
+                          "Все дисплеи активированы")

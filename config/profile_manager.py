@@ -93,5 +93,25 @@ class ProfileManager:
     def default_ide(self) -> str:
         return str(self._config.get("default_ide", "idea"))
 
+    @property
+    def microphone_index(self) -> int | None:
+        val = self._config.get("microphone_index")
+        try:
+            return int(val) if val is not None else None
+        except (ValueError, TypeError):
+            return None
+
+    @property
+    def voice(self) -> str:
+        return str(self._config.get("voice", "en-US-BrianMultilingualNeural")).strip()
+
+    @property
+    def speed(self) -> str:
+        return str(self._config.get("speed", "+0%")).strip()
+
+    @property
+    def pitch(self) -> str:
+        return str(self._config.get("pitch", "+0Hz")).strip()
+
     def reload(self):
         self._config = load_config()

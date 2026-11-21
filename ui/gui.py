@@ -960,6 +960,26 @@ class MainWindow:
             values=self._mic_options, state="readonly", font=FONTS["body"]
         ).pack(side="left", fill="x", expand=True)
 
+        # Выбор голоса Джарвиса
+        r_voice = make_row(sec_audio, "Голос Джарвиса:")
+        self._voice_labels = {
+            "en-US-BrianMultilingualNeural": "Брайан (Мужской, харизматичный кино-Джарвис)",
+            "ru-RU-SvetlanaNeural": "Светлана (Женский, чистый русский)",
+            "en-US-AndrewMultilingualNeural": "Эндрю (Мужской, спокойный тембр)",
+            "en-AU-WilliamMultilingualNeural": "Уильям (Мужской, британский акцент)",
+            "ru-RU-DmitryNeural": "Дмитрий (Мужской, классический)",
+            "utrobin": "Офлайн VITS (Локальный, без интернета)",
+        }
+        current_voice = cfg.get("voice", "en-US-BrianMultilingualNeural")
+        voice_label = self._voice_labels.get(current_voice, self._voice_labels["en-US-BrianMultilingualNeural"])
+        self._voice_var = tk.StringVar(value=voice_label)
+        voice_cb = ttk.Combobox(
+            r_voice, textvariable=self._voice_var,
+            values=list(self._voice_labels.values()), state="readonly", font=FONTS["body"]
+        )
+        voice_cb.pack(side="left", fill="x", expand=True)
+        voice_cb.bind("<<ComboboxSelected>>", lambda e: self._on_voice_changed())
+
         # Громкость голоса Джарвиса
         vol_frame = tk.Frame(sec_audio, bg=THEME["bg_card"])
         vol_frame.pack(fill="x", padx=14, pady=5)
@@ -1225,6 +1245,21 @@ class MainWindow:
         self._vol_lbl.config(text=f"{pct}%")
         ProfileManager().current["voice_volume"] = pct
 
+    def _on_voice_changed(self):
+        chosen_voice = next(
+            (k for k, v in self._voice_labels.items() if v == self._voice_var.get()),
+            "en-US-BrianMultilingualNeural"
+        )
+        ProfileManager().current["voice"] = chosen_voice
+        if self.speaker:
+            if chosen_voice == "utrobin":
+                from core.speakers.utrobin_speaker import UtrobinSpeaker
+                self.speaker.engine = UtrobinSpeaker()
+            else:
+                from core.speakers.edge_speaker import EdgeSpeaker
+                self.speaker.engine = EdgeSpeaker(voice=chosen_voice)
+            self._preview_voice()
+
     def _preview_voice(self):
         if self.speaker:
             threading.Thread(
@@ -1329,6 +1364,10 @@ class MainWindow:
         cfg["map_provider"] = next(
             (k for k, v in self._map_labels.items() if v == self._map_var.get()), "google")
         cfg["voice_volume"] = int(self._vol_var.get())
+        cfg["voice"] = next(
+            (k for k, v in self._voice_labels.items() if v == self._voice_var.get()),
+            "en-US-BrianMultilingualNeural"
+        )
         cfg["honorific_chance"] = round(self._honor_chance_var.get() / 100, 2)
         cfg["notify_channel"] = next(
             (k for k, v in self._notify_labels.items() if v == self._notify_var.get()), "pc")

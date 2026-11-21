@@ -4,6 +4,7 @@
 системный микшер Windows: меняется только то, насколько громко говорит
 сам Джарвис.
 """
+import time
 import numpy as np
 import sounddevice as sd
 
@@ -27,3 +28,5 @@ def play(samples: np.ndarray, sample_rate: int):
     data = np.clip(samples.astype(np.float32) * gain, -1.0, 1.0)
     sd.play(data, samplerate=sample_rate)
     sd.wait()
+    # Защитный интервал для рассеивания акустического эха комнаты в микрофоне
+    time.sleep(0.12)

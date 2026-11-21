@@ -66,6 +66,21 @@ ACTIONS = {
     # Музыка
     "music:play_song": ("commands.web.intents_web", "handle_play_song", "включи песню {q}", "Какую песню включить?"),
     "web:music": ("commands.web.intents_web", "handle_music", "включи музыку", None),
+
+    # Википедия
+    "wiki:search": ("commands.skills.wiki", "handle_wiki_search", "что такое {q}", "О ком или о чём рассказать?"),
+
+    # Сценарии
+    "routine:morning": ("commands.skills.routines", "handle_morning", "доброе утро", None),
+    "routine:work": ("commands.skills.routines", "handle_work", "рабочий режим", None),
+    "routine:sleep": ("commands.skills.routines", "handle_sleep", "спокойной ночи", None),
+
+    # Окна
+    "window:snap_left": ("commands.skills.window_control", "handle_snap_left", "окно влево", None),
+    "window:snap_right": ("commands.skills.window_control", "handle_snap_right", "окно вправо", None),
+    "window:minimize_all": ("commands.skills.window_control", "handle_minimize_all", "сверни всё", None),
+    "window:close_tab": ("commands.skills.window_control", "handle_close_tab", "закрой вкладку", None),
+    "window:reopen_tab": ("commands.skills.window_control", "handle_reopen_tab", "верни вкладку", None),
 }
 
 ACTION_LABELS = frozenset(ACTIONS)

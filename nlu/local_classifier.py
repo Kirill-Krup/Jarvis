@@ -192,7 +192,7 @@ def evaluate():
     if bad_conf:
         print(f"Средняя уверенность ошибочных: {sum(bad_conf) / len(bad_conf):.2f}")
     for phrase, expected, got, conf in errors:
-        print(f"  ✗ «{phrase}»: ожидали {expected}, получили {got} ({conf:.2f})")
+        print(f"  [!] «{phrase}»: ожидали {expected}, получили {got} ({conf:.2f})")
 
 
 def main():

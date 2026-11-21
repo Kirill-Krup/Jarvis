@@ -70,8 +70,15 @@ class VoiceLoop:
     # --------------------------------------------------------------- шаги
 
     def _ready(self):
-        self.ui.set_status(STATUS_READY)
-        self.ui.set_home_status(HOME_READY)
+        if getattr(self.commands, "conversation_mode", False):
+            self.ui.set_status("Режим разговора [АКТИВЕН] - Слушаю...")
+            self.ui.set_home_status("Режим диалога (Ollama)...")
+        elif getattr(self.commands, "guest_mode", False):
+            self.ui.set_status("Ожидаю обращение... [ГОСТЕВОЙ РЕЖИМ]")
+            self.ui.set_home_status("Системы в норме. Гостевой доступ.")
+        else:
+            self.ui.set_status(STATUS_READY)
+            self.ui.set_home_status(HOME_READY)
 
     def _wake_up(self):
         self._sleeping = False
@@ -152,14 +159,31 @@ class VoiceLoop:
 
     def _listen_in_context(self) -> str | None:
         timeout = self.profile.context_timeout
-        if getattr(self.commands, "last_was_chat", False):
+        if getattr(self.commands, "conversation_mode", False):
+            timeout = max(timeout * 2.5, 8.0)
+        elif getattr(self.commands, "has_pending", False):
+            timeout = max(timeout * 2.0, 6.0)
+        elif getattr(self.commands, "last_was_chat", False):
             timeout *= CHAT_CONTEXT_FACTOR
-        self.ui.set_status(f"Слушаю продолжение ({int(timeout)} сек)...")
+
+        status_text = (
+            f"Режим разговора ({int(timeout)} сек)..."
+            if getattr(self.commands, "conversation_mode", False)
+            else f"Слушаю продолжение ({int(timeout)} сек)..."
+        )
+        self.ui.set_status(status_text)
         self.ui.set_home_status("Слушаю диалог без кодового слова...")
 
         heard = self.listener.listen(timeout_sec=timeout)
         text = heard.replace(WAKE_WORD, "").strip() if heard else ""
         if len(text) < MIN_COMMAND_CHARS:
+            if getattr(self.commands, "conversation_mode", False):
+                self._in_context = False
+                log_voice(f"Пауза в разговоре ({int(timeout)}с), ожидаю «Джарвис»")
+                self._ready()
+                return None
+            if getattr(self.commands, "has_pending", False):
+                self.commands.clear_pending()
             self._in_context = False
             log_voice(f"Время контекста ({int(timeout)}с) истекло, ожидаю «Джарвис»")
             self._ready()

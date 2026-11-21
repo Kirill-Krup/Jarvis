@@ -9,11 +9,7 @@ import onnxruntime
 
 from core import audio_out
 from core.speakers.base_speaker import BaseSpeaker
-
-try:
-    import num2words
-except ImportError:
-    num2words = None
+from core.speakers.number_verbalizer import verbalize_numbers
 
 MODEL_PATH = "voice_samples/model.onnx"
 TOKENIZER_REPO = "utrobinmv/tts_ru_free_hf_vits_low_multispeaker"
@@ -22,29 +18,6 @@ SPEAKER_ID = 1
 ACCENT_CACHE_LIMIT = 300
 
 _SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
-
-
-def verbalize_numbers(text: str) -> str:
-    """Числа и дроби -> русские слова, чтобы TTS их читал."""
-    if not num2words:
-        return text
-
-    def frac(m):
-        try:
-            whole, part = m.group(0).replace(",", ".").split(".")
-            return (f"{num2words.num2words(int(whole), lang='ru')} целых "
-                    f"{num2words.num2words(int(part), lang='ru')} сотых")
-        except Exception:
-            return m.group(0)
-
-    def integer(m):
-        try:
-            return num2words.num2words(int(m.group(0)), lang="ru")
-        except Exception:
-            return m.group(0)
-
-    text = re.sub(r"\b\d+[.,]\d+\b", frac, text)
-    return re.sub(r"\b\d+\b", integer, text)
 
 
 class UtrobinSpeaker(BaseSpeaker):

@@ -1,4 +1,8 @@
-"""Слушатель микрофона: Silero VAD (ONNX) + распознавание Vosk."""
+"""Слушатель микрофона: Silero VAD (ONNX) + распознавание Vosk.
+
+Включает автоматическое восстановление аудиопотока при сбоях Bluetooth/PortAudio,
+быструю загрузку модели и защиту от переполнения буфера (input overflow).
+"""
 import json
 import os
 import queue
@@ -34,45 +38,57 @@ class Listener:
     _vad_cache = None
     _vosk_cache = None
 
-    def __init__(self, model_path="model", wake_word="джарвис",
+    def __init__(self, model_path="model_small", wake_word="джарвис",
                  auto_detect_device=True, custom_device=None):
         self.q = queue.Queue()
         self.wake_word = wake_word
         self.last_alternatives: list[str] = []
 
+        from config.profile_manager import ProfileManager
+        self.profile = ProfileManager()
+        self.vad_threshold = float(self.profile.vad_threshold)
+        self.silence_ms = int(self.profile.silence_ms)
+        self.mic_gain = float(self.profile.mic_gain)
+
+        # Выбираем модель: по умолчанию model_small для мгновенной загрузки (0.8с вместо 2.5 мин)
+        cfg_model = getattr(self.profile, "vosk_model", None)
+        if cfg_model and os.path.exists(cfg_model):
+            model_path = cfg_model
+        elif not os.path.exists(model_path) and os.path.exists("model"):
+            model_path = "model"
+
+        # Определяем микрофон: custom -> сохранённый в профиле -> автоопределение
         self.device_manager = AudioDeviceManager()
-        if custom_device is not None:
-            self.device_manager.set_custom_input_device(custom_device)
+        saved_device = custom_device if custom_device is not None else self.profile.microphone_index
+
+        if saved_device is not None and self.device_manager.set_custom_input_device(saved_device):
+            self.device = saved_device
         elif auto_detect_device:
-            self.device_manager.get_best_input_device()
-        self.device = self.device_manager.get_current_input_device()
-        self.device_manager.print_devices_status()
+            self.device = self.device_manager.get_best_input_device()
+        else:
+            self.device = self.device_manager.get_current_input_device()
 
         if Listener._vad_cache is None:
             Listener._vad_cache = SileroVAD()
         self.vad = Listener._vad_cache
 
         if Listener._vosk_cache is None:
-            if not os.path.exists(model_path) and os.path.exists("model_small"):
-                model_path = "model_small"
             try:
                 Listener._vosk_cache = Model(model_path)
             except Exception as e:
-                print(f"[ERROR] Не удалось загрузить модель Vosk: {e}")
-                print("Папка 'model' или 'model_small' должна лежать в корне проекта.")
-                sys.exit(1)
+                # Резервная попытка загрузки другой папки модели
+                fallback_path = "model" if model_path == "model_small" else "model_small"
+                if os.path.exists(fallback_path):
+                    Listener._vosk_cache = Model(fallback_path)
+                else:
+                    print(f"[ERROR] Не удалось загрузить модель Vosk: {e}")
+                    sys.exit(1)
 
         self.recognizer = KaldiRecognizer(Listener._vosk_cache, SAMPLE_RATE)
         try:
             self.recognizer.SetMaxAlternatives(MAX_ALTERNATIVES)
         except Exception:
             pass
-
-        from config.profile_manager import ProfileManager
-        self.profile = ProfileManager()
-        self.vad_threshold = self.profile.vad_threshold
-        self.silence_ms = self.profile.silence_ms
-        self.mic_gain = self.profile.mic_gain
 
         self.stream = None
         self._start_stream()
@@ -89,14 +105,26 @@ class Listener:
                 self.stream.close()
             except Exception:
                 pass
-        self.stream = sd.RawInputStream(
-            samplerate=SAMPLE_RATE, blocksize=BLOCK_SIZE, device=self.device,
-            dtype="int16", channels=1, callback=self._callback)
-        self.stream.start()
+            self.stream = None
+
+        try:
+            self.stream = sd.RawInputStream(
+                samplerate=SAMPLE_RATE, blocksize=BLOCK_SIZE, device=self.device,
+                dtype="int16", channels=1, callback=self._callback)
+            self.stream.start()
+        except Exception as e:
+            print(f"[ERROR] Сбой запуска микрофона [{self.device}]: {e}")
+
+    def _ensure_stream_active(self):
+        """Проверяет работоспособность потока и перезапускает его при сбое."""
+        if self.stream is None or not getattr(self.stream, "active", False):
+            self._start_stream()
+            time.sleep(0.05)
 
     def _callback(self, indata, frames, time_info, status):
         if status:
-            print(status, file=sys.stderr)
+            if status.input_overflow:
+                self._drain_queue()
         self.q.put(bytes(indata))
 
     def _drain_queue(self):
@@ -126,6 +154,7 @@ class Listener:
     def calibrate(self, duration_sec: float = 2.5) -> dict:
         """Замеряет фоновый шум и подбирает порог VAD и усиление."""
         samples = []
+        self._ensure_stream_active()
         self._drain_queue()
         end = time.time() + duration_sec
         while time.time() < end:
@@ -135,18 +164,18 @@ class Listener:
                 continue
             samples.append(np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0)
         if not samples:
-            return {"threshold": 0.5, "gain": 1.0, "status": "no_data"}
+            return {"threshold": 0.40, "gain": 1.0, "status": "no_data"}
 
         audio = np.concatenate(samples)
         rms = float(np.sqrt(np.mean(audio ** 2)))
         peak = float(np.max(np.abs(audio)))
 
         if rms < 0.012:
-            threshold, gain = 0.45, (1.3 if peak < 0.2 else 1.0)
+            threshold, gain = 0.40, (1.3 if peak < 0.2 else 1.0)
         elif rms < 0.04:
-            threshold, gain = 0.50, 1.0
+            threshold, gain = 0.45, 1.0
         else:
-            threshold, gain = 0.60, 0.9
+            threshold, gain = 0.55, 0.9
 
         self.vad_threshold, self.mic_gain = threshold, gain
         try:
@@ -179,16 +208,24 @@ class Listener:
         silence_frames = wait_frames = 0
         speaking = False
 
+        self._ensure_stream_active()
         self.recognizer.Reset()
         self.vad.reset()
         self._drain_queue()
         self.last_alternatives = []
 
+        # Порог удержания речи (гистерезис VAD)
+        hold_threshold = max(0.25, self.vad_threshold * 0.7)
+
         while True:
             try:
                 data = self.q.get(timeout=2.0)
             except queue.Empty:
-                if not speaking:
+                if speaking:
+                    break
+                # Если очередь пуста, восстанавливаем поток и продолжаем ожидание
+                self._ensure_stream_active()
+                if timeout_sec is not None:
                     break
                 continue
 
@@ -200,12 +237,17 @@ class Listener:
             if samples.shape[0] != BLOCK_SIZE:
                 continue
 
-            if self.vad(samples) > self.vad_threshold:
+            prob = self.vad(samples)
+
+            if prob > self.vad_threshold:
                 speaking = True
                 silence_frames = 0
                 self.recognizer.AcceptWaveform(data)
             elif speaking:
-                silence_frames += 1
+                if prob > hold_threshold:
+                    silence_frames = 0
+                else:
+                    silence_frames += 1
                 self.recognizer.AcceptWaveform(data)
                 if silence_frames >= silence_needed:
                     break
@@ -243,7 +285,6 @@ class Listener:
             return None
 
         command = GREETING_RE.sub("", " ".join(words[wake_idx + 1:]).strip()).strip()
-        # альтернативы Vosk тоже обрезаем до команды: пригодятся для исправления
         self.last_alternatives = [self._strip_wake(t) for t in self.last_alternatives]
         return ("wake", command, text)
 
